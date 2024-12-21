@@ -45,8 +45,14 @@ enum Instruction {
     },
 
     // ADRP
-    // 31 = Zero
     FormPCRelativeAddress {
+        imm_high: u32,
+        imm_low: u32,
+        reg_dest: Register,
+    },
+
+    // ADRP
+    FormPCRelativeAddressToPage {
         imm_high: u32,
         imm_low: u32,
         reg_dest: Register,
@@ -74,6 +80,50 @@ enum Instruction {
         reg_transferred1: Register,
         reg_transferred2: Register,
         variant64bit: bool,
+    },
+
+    // LDNP
+    LoadPairOfRegistersNontemporalHint {
+        imm_offset: u32,
+        reg_base: Register, // 31 = Sp
+        reg_transferred1: Register,
+        reg_transferred2: Register,
+        variant64bit: bool,
+    },
+
+    // LDNP SIMD&FP
+    LoadPairOfRegistersFloatNontemporalHint {
+        imm_offset: u32,
+        reg_base: Register, // 31 = Sp
+        reg_transferred1: Register,
+        reg_transferred2: Register,
+        variant: Variant,
+    },
+
+    // SVC
+    SupervisorCall {
+        imm: u32,
+    },
+
+    // UMLAL, UMLAL2
+    UnsignedMultiplyAddLongVector {
+        arr_dest: HalfArrangement,
+        arr_source: FullArrangement,
+        reg_dest: Register,
+        reg_source1: Register,
+        reg_source2: Register,
+        upper: bool,
+    },
+
+    // UMLAL, UMLAL2
+    UnsignedMultiplyAddLongByElement {
+        arr_dest: HalfArrangement,
+        arr_source: FullArrangement,
+        index: u32,
+        reg_dest: Register,
+        reg_source1: Register,
+        reg_source2: Register,
+        upper: bool,
     },
 }
 
@@ -107,6 +157,50 @@ impl AddressingMode {
 
 
 #[derive(Debug)]
+enum FullArrangement {
+    B8,
+    B16,
+    H4,
+    H8,
+    S2,
+    S4,
+}
+
+impl FullArrangement {
+    fn parse(value: u32, q: u32) -> Self {
+        match (value, q) {
+            (0b00, 0b0) => FullArrangement::B8,
+            (0b00, 0b1) => FullArrangement::B16,
+            (0b01, 0b0) => FullArrangement::H4,
+            (0b01, 0b1) => FullArrangement::H8,
+            (0b10, 0b0) => FullArrangement::S2,
+            (0b10, 0b1) => FullArrangement::S4,
+            _ => unreachable!(),
+        }
+    }
+}
+
+
+#[derive(Debug)]
+enum HalfArrangement {
+    D2,
+    H8,
+    S4,
+}
+
+impl HalfArrangement {
+    fn parse(value: u32) -> Self {
+        match value {
+            0b00 => HalfArrangement::H8,
+            0b01 => HalfArrangement::S4,
+            0b10 => HalfArrangement::D2,
+            _ => unreachable!(),
+        }
+    }
+}
+
+
+#[derive(Debug)]
 enum Shift {
     LSL,
     LSR,
@@ -127,11 +221,20 @@ impl Shift {
 }
 
 
+#[derive(Debug)]
+enum Variant {
+    V32,
+    V64,
+    V128,
+}
+
+
 fn main() {
     // let mut f = File::open("/bin/sh").unwrap();
     // let mut f = File::open("molcv").unwrap();
     // let mut f = File::open("/opt/homebrew/lib/python3.11/site-packages/numpy/random/_bounded_integers.cpython-311-darwin.so").unwrap();
-    let mut f = File::open("simple-lib/target/debug/simple-lib").unwrap();
+    // let mut f = File::open("simple-lib/target/debug/simple-lib").unwrap();
+    let mut f = File::open("hello").unwrap();
 
     let mut buf = Vec::new();
     let size = f.read_to_end(&mut buf).unwrap();
@@ -304,10 +407,18 @@ fn main() {
                     reg_source: Register((instr >> 5) & register_mask),
                     variant64bit,
                 });
+            } else if (instr >> 24) & 0b1001_1111 == 0b0001_0000 {
+                // ADR, p. 1610
+
+                instructions.push(Instruction::FormPCRelativeAddress {
+                    imm_high: (instr >> 5) & 0b111_1111_1111_1111_1111,
+                    imm_low: (instr >> 29) & 0b11,
+                    reg_dest: Register(instr & register_mask),
+                });
             } else if (instr >> 24) & 0b1001_1111 == 0b1001_0000 {
                 // ADRP, p. 1611
 
-                instructions.push(Instruction::FormPCRelativeAddress {
+                instructions.push(Instruction::FormPCRelativeAddressToPage {
                     imm_high: (instr >> 5) & 0b111_1111_1111_1111_1111,
                     imm_low: (instr >> 29) & 0b11,
                     reg_dest: Register(instr & register_mask),
@@ -325,7 +436,7 @@ fn main() {
                 instructions.push(Instruction::MoveWideWithZero {
                     reg_dest: Register(instr & register_mask),
                     imm: (instr >> 5) & 0b1111_1111_1111_1111,
-                    shift: hw << 4,
+                    shift: hw,
                     variant64bit,
                 });
             } else if instr >> 26 == 0b10_0101 {
@@ -335,23 +446,111 @@ fn main() {
                     offset: (instr & 0b11_1111_1111_1111_1111_1111_1111) << 2,
                 });
             } else if (instr >> 22) & 0b1_1111_1001 == 0b0_1010_0001 {
+                // LDNP, p. 1997
                 // LDP, p. 1999
 
-                instructions.push(Instruction::LoadPairOfRegisters {
-                    addressing_mode: AddressingMode::parse((instr >> 23) & 0b11),
+                let mode = (instr >> 23) & 0b11;
+
+                if mode == 0b00 {
+                    instructions.push(Instruction::LoadPairOfRegistersNontemporalHint {
+                        imm_offset: (instr >> 15) & 0b111_1111,
+                        reg_base: Register((instr >> 5) & register_mask),
+                        reg_transferred1: Register(instr & register_mask),
+                        reg_transferred2: Register((instr >> 10) & register_mask),
+                        variant64bit: (instr >> 31) > 0,
+                    });
+                } else {
+                    instructions.push(Instruction::LoadPairOfRegisters {
+                        addressing_mode: AddressingMode::parse((instr >> 23) & 0b11),
+                        imm_offset: (instr >> 15) & 0b111_1111,
+                        reg_base: Register((instr >> 5) & register_mask),
+                        reg_transferred1: Register(instr & register_mask),
+                        reg_transferred2: Register((instr >> 10) & register_mask),
+                        variant64bit: (instr >> 31) > 0,
+                    });
+                }
+            } else if (instr >> 22) & 0b1111_1111 == 0b1011_0001 {
+                // LDNP SIMD&FP, p. 2927
+
+                instructions.push(Instruction::LoadPairOfRegistersFloatNontemporalHint {
                     imm_offset: (instr >> 15) & 0b111_1111,
                     reg_base: Register((instr >> 5) & register_mask),
                     reg_transferred1: Register(instr & register_mask),
                     reg_transferred2: Register((instr >> 10) & register_mask),
-                    variant64bit: (instr >> 31) > 0,
+                    variant: match instr >> 30 {
+                        0b00 => Variant::V32,
+                        0b01 => Variant::V64,
+                        0b10 => Variant::V128,
+                        _ => unreachable!(),
+                    },
+                });
+            } else if instr & 0b1111_1111_1110_0000_0000_0000_0001_1111 == 0b1101_0100_0000_0000_0000_0000_0000_0001 {
+                // SVC, p. 2411
+
+                instructions.push(Instruction::SupervisorCall {
+                    imm: (instr >> 5) & 0b1111_1111_1111_1111,
+                });
+            } else if (instr >> 10) & 0b10_1111_1100_1000_0011_1111 == 0b00_1011_1000_1000_0010_0000 {
+                // UMLAL, UMLAL2 vector, p. 3330
+
+                let q = (instr >> 30) & 0b1;
+
+                instructions.push(Instruction::UnsignedMultiplyAddLongVector {
+                    arr_dest: HalfArrangement::parse((instr >> 22) & 0b11),
+                    arr_source: FullArrangement::parse((instr >> 10) & 0b11, q),
+                    reg_dest: Register(instr & register_mask),
+                    reg_source1: Register((instr >> 5) & register_mask),
+                    reg_source2: Register((instr >> 16) & register_mask),
+                    upper: q > 0,
+                });
+            } else if (instr >> 10) & 0b10_1111_1100_0000_0011_1101 == 0b00_1011_1100_0000_0000_1000 {
+                // UMLAL, UMLAL2 by element, p. 3327
+
+                let q = (instr >> 30) & 0b1;
+                let size = (instr >> 22) & 0b11;
+                let rm = (instr >> 16) & 0b1111;
+                let m = (instr >> 20) & 0b1;
+                let hl = (((instr >> 11) & 0b1) << 1) + ((instr >> 21) & 0b1);
+
+                instructions.push(Instruction::UnsignedMultiplyAddLongByElement {
+                    arr_dest: HalfArrangement::parse((instr >> 22) & 0b11),
+                    arr_source: FullArrangement::parse((instr >> 10) & 0b11, q),
+                    index: match size {
+                        0b01 => hl,
+                        0b10 => (hl << 1) + m,
+                        _ => unreachable!(),
+                    },
+                    reg_dest: Register(instr & register_mask),
+                    reg_source1: Register((instr >> 5) & register_mask),
+                    reg_source2: match size {
+                        0b01 => Register(rm),
+                        0b10 => Register(rm + m << 5),
+                        _ => unreachable!(),
+                    },
+                    upper: q > 0,
                 });
             } else {
                 eprintln!("unknown instruction");
-                eprintln!("{:?}", instr >> 23);
+                eprintln!("{:?}", instr);
             }
         }
 
-        eprintln!("{:#?}", instructions);
+
+        let mut registers = [0u64; 32];
+
+        for instruction in instructions {
+            match instruction {
+                Instruction::MoveWideWithZero { reg_dest, imm, shift, variant64bit } => {
+                    registers[reg_dest.0 as usize] = (imm as u64) << (shift << 4);
+                },
+                Instruction::FormPCRelativeAddress { imm_high, imm_low, reg_dest } => {
+                    registers[reg_dest.0 as usize] = (imm_high as u64) << 12 + imm_low as u64;
+                },
+                _ => panic!("unknown instruction: {:?}", instruction),
+            }
+        }
+
+        // eprintln!("{:#?}", instructions);
 
         // let op = instr >> 27;
         // let vr = (instr >> 23) & 0b1111;
