@@ -5,6 +5,7 @@ use mach_object::{OFile, MachCommand, LoadCommand};
 
 #[derive(Debug)]
 enum Instruction {
+    // STP
     StorePairOfRegisters {
         imm: i32,
         rn: Register,
@@ -12,6 +13,7 @@ enum Instruction {
         rt2: Register,
     },
 
+    // ORR
     // 31 = Zero
     BitwiseOr {
         imm: u32,
@@ -19,28 +21,90 @@ enum Instruction {
         reg_nonshifted: Register,
         reg_shifted: Register,
         shift: Shift,
+        variant64bit: bool,
     },
 
+    // ADD
+    // 31 = Sp
     AddImmediate {
         imm: u32,
         reg_dest: Register,
         reg_source: Register,
         shifted: bool,
+        variant64bit: bool,
+    },
+
+    // SBFM
+    // 31 = Zero
+    SignedBitfieldMove {
+        imm_source: u32,
+        imm_rotate: u32,
+        reg_dest: Register,
+        reg_source: Register,
+        variant64bit: bool,
+    },
+
+    // ADRP
+    // 31 = Zero
+    FormPCRelativeAddress {
+        imm_high: u32,
+        imm_low: u32,
+        reg_dest: Register,
+    },
+
+    // MOVZ
+    // 31 = Zero
+    MoveWideWithZero {
+        reg_dest: Register,
+        imm: u32,
+        shift: u32,
+        variant64bit: bool,
+    },
+
+    // BL
+    BranchWithLink {
+        offset: u32,
+    },
+
+    // LDP
+    LoadPairOfRegisters {
+        addressing_mode: AddressingMode,
+        imm_offset: u32,
+        reg_base: Register, // 31 = Sp
+        reg_transferred1: Register,
+        reg_transferred2: Register,
+        variant64bit: bool,
     },
 }
 
 
+// p. 322
+// Wn => 0-30, 32 bits
+// Xn => 0-30, 64 bits
+// WSP, WZR => 31, 32 bits
+// SP, XZR => 31, 64 bits
 #[derive(Debug)]
-struct Register {
-    // p. 322
+struct Register(u32);
 
-    // Wn => 0-30, 32 bits
-    // Xn => 0-30, 64 bits
-    // WSP => 31, 32 bits
-    // SP => 31, 64 bits
-    id: u32,
-    half: bool,
+
+#[derive(Debug)]
+enum AddressingMode {
+    PostIndex,
+    PreIndex,
+    SignedOffset,
 }
+
+impl AddressingMode {
+    fn parse(value: u32) -> Self {
+        match value {
+            0b01 => AddressingMode::PostIndex,
+            0b10 => AddressingMode::SignedOffset,
+            0b11 => AddressingMode::PreIndex,
+            _ => unreachable!(),
+        }
+    }
+}
+
 
 #[derive(Debug)]
 enum Shift {
@@ -170,7 +234,7 @@ fn main() {
 
         let register_mask = 0b11111;
 
-        for instruction_index in 0..4 {
+        for instruction_index in 0..10 {
             let instr = u32::from_le_bytes(mem[(pointer + instruction_index * 4)..(pointer + (instruction_index + 1) * 4)].try_into().unwrap());
 
 
@@ -178,25 +242,19 @@ fn main() {
                 // STP, p. 2332
 
                 let imm7 = (instr >> 15) & 0b1111111;
-                let rt2 = (instr >> 10) & register_mask;
-                let rn = (instr >> 5) & register_mask;
-                let rt = instr & register_mask;
                 let variant64bit = (instr >> 31) > 0;
 
                 instructions.push(Instruction::StorePairOfRegisters {
                     imm: (imm7 << 3) as i32,
-                    rt1: Register { id: rt, half: !variant64bit },
-                    rt2: Register { id: rt2, half: !variant64bit },
-                    rn: Register { id: rn, half: !variant64bit },
+                    rt1: Register(instr & register_mask),
+                    rt2: Register((instr >> 10) & register_mask),
+                    rn: Register((instr >> 5) & register_mask),
                 });
             } else if (instr >> 21) & 0b1111111001 == 0b0101010000 {
                 // ORR, p. 2141
 
                 let variant64bit = (instr >> 31) > 0;
-                let rm = (instr >> 16) & register_mask;
                 let imm6 = (instr >> 10) & 0b111111;
-                let rn = (instr >> 5) & register_mask;
-                let rt = instr & register_mask;
                 let shift = Shift::parse((instr >> 22) & 0b11);
 
                 if !variant64bit {
@@ -205,15 +263,91 @@ fn main() {
 
                 instructions.push(Instruction::BitwiseOr {
                     imm: imm6,
-                    reg_dest: Register { id: rt, half: !variant64bit },
-                    reg_shifted: Register { id: rm, half: !variant64bit },
-                    reg_nonshifted: Register { id: rn, half: !variant64bit },
+                    reg_dest: Register(instr & register_mask),
+                    reg_shifted: Register((instr >> 16) & register_mask),
+                    reg_nonshifted: Register((instr >> 5) & register_mask),
                     shift,
+                    variant64bit,
                 });
-            } else if (instr >> 23) & 0b11111111 == 0b00100010 {
+            } else if (instr >> 23) & 0b1111_1111 == 0b0010_0010 {
+                // ADD, p. 1597
 
+                let variant64bit = (instr >> 31) > 0;
+
+                instructions.push(Instruction::AddImmediate {
+                    imm: (instr >> 10) & 0b11_1111_1111,
+                    reg_dest: Register(instr & register_mask),
+                    reg_source: Register((instr >> 5) & register_mask),
+                    shifted: (instr >> 23) & 0b1 > 0,
+                    variant64bit,
+                });
+            } else if (instr >> 23) & 0b1111_1111 == 0b0010_0110 {
+                // SBFM, p. 2227
+
+                let variant64bit = (instr >> 31) > 0;
+                let imm_rotate = (instr >> 16) & 0b11111;
+                let imm_source = (instr >> 10) & 0b11111;
+                let n = (instr >> 22) & 0b1;
+
+                if variant64bit {
+                    assert!(n == 1);
+                } else {
+                    assert!(n == 0);
+                    assert!(imm_rotate == 0);
+                    assert!(imm_source == 0);
+                }
+
+                instructions.push(Instruction::SignedBitfieldMove {
+                    imm_source,
+                    imm_rotate,
+                    reg_dest: Register(instr & register_mask),
+                    reg_source: Register((instr >> 5) & register_mask),
+                    variant64bit,
+                });
+            } else if (instr >> 24) & 0b1001_1111 == 0b1001_0000 {
+                // ADRP, p. 1611
+
+                instructions.push(Instruction::FormPCRelativeAddress {
+                    imm_high: (instr >> 5) & 0b111_1111_1111_1111_1111,
+                    imm_low: (instr >> 29) & 0b11,
+                    reg_dest: Register(instr & register_mask),
+                });
+            } else if (instr >> 23) & 0b1111_1111 == 0b1010_0101 {
+                // MOVZ, p. 2113
+
+                let variant64bit = (instr >> 31) > 0;
+                let hw = (instr >> 21) & 0b11;
+
+                if variant64bit {
+                    assert_eq!(hw, 0);
+                }
+
+                instructions.push(Instruction::MoveWideWithZero {
+                    reg_dest: Register(instr & register_mask),
+                    imm: (instr >> 5) & 0b1111_1111_1111_1111,
+                    shift: hw << 4,
+                    variant64bit,
+                });
+            } else if instr >> 26 == 0b10_0101 {
+                // BL, p. 1653
+
+                instructions.push(Instruction::BranchWithLink {
+                    offset: (instr & 0b11_1111_1111_1111_1111_1111_1111) << 2,
+                });
+            } else if (instr >> 22) & 0b1_1111_1001 == 0b0_1010_0001 {
+                // LDP, p. 1999
+
+                instructions.push(Instruction::LoadPairOfRegisters {
+                    addressing_mode: AddressingMode::parse((instr >> 23) & 0b11),
+                    imm_offset: (instr >> 15) & 0b111_1111,
+                    reg_base: Register((instr >> 5) & register_mask),
+                    reg_transferred1: Register(instr & register_mask),
+                    reg_transferred2: Register((instr >> 10) & register_mask),
+                    variant64bit: (instr >> 31) > 0,
+                });
             } else {
                 eprintln!("unknown instruction");
+                eprintln!("{:?}", instr >> 23);
             }
         }
 
