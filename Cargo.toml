@@ -1,0 +1,7 @@
+[package]
+name = "arm-to-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mach_object = "0.1.17"
