@@ -46,8 +46,7 @@ enum Instruction {
 
     // ADRP
     FormPCRelativeAddress {
-        imm_high: u32,
-        imm_low: u32,
+        offset: i32,
         reg_dest: Register,
     },
 
@@ -411,8 +410,7 @@ fn main() {
                 // ADR, p. 1610
 
                 instructions.push(Instruction::FormPCRelativeAddress {
-                    imm_high: (instr >> 5) & 0b111_1111_1111_1111_1111,
-                    imm_low: (instr >> 29) & 0b11,
+                    offset: sign_extend((((instr >> 5) & 0b111_1111_1111_1111_1111) << 2) + ((instr >> 29) & 0b11), 20),
                     reg_dest: Register(instr & register_mask),
                 });
             } else if (instr >> 24) & 0b1001_1111 == 0b1001_0000 {
@@ -531,23 +529,46 @@ fn main() {
                 });
             } else {
                 eprintln!("unknown instruction");
-                eprintln!("{:?}", instr);
+                eprintln!("{:0>8b}", instr);
             }
         }
 
 
         let mut registers = [0u64; 32];
+        let reg_pc = 15;
+
+        registers[reg_pc] = pointer as u64;
 
         for instruction in instructions {
             match instruction {
                 Instruction::MoveWideWithZero { reg_dest, imm, shift, variant64bit } => {
                     registers[reg_dest.0 as usize] = (imm as u64) << (shift << 4);
                 },
-                Instruction::FormPCRelativeAddress { imm_high, imm_low, reg_dest } => {
-                    registers[reg_dest.0 as usize] = (imm_high as u64) << 12 + imm_low as u64;
+                Instruction::FormPCRelativeAddress { offset, reg_dest } => {
+                    registers[reg_dest.0 as usize] = (registers[reg_pc] as i64 + offset as i64) as u64;
+                    // eprintln!("{:x?}", registers[reg_dest.0 as usize]);
+                },
+                Instruction::SupervisorCall { imm } => {
+                    match registers[16] {
+                        // Write
+                        4 => {
+                            let buf = registers[1] as usize;
+                            let count = registers[2] as usize;
+
+                            let mut file = unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(registers[0] as i32) };
+                            let result = std::io::Write::write(&mut file, &mem[buf..(buf + count)]);
+                            eprintln!("{:?}", result);
+                        },
+
+                        _ => todo!(),
+                    }
+
+                    break;
                 },
                 _ => panic!("unknown instruction: {:?}", instruction),
             }
+
+            registers[reg_pc] += 4;
         }
 
         // eprintln!("{:#?}", instructions);
@@ -563,4 +584,11 @@ fn main() {
         // eprintln!("{:?}", op);
         // eprintln!("vr={}, l={}, imm7={}, rt2={}, rn={}, rt={}", vr, l, imm7, rt2, rn, rt);
     }
+}
+
+
+fn sign_extend(value: u32, bit_count: u32) -> i32 {
+    let shift = 32 - bit_count;
+    (value << shift) as i32 >> shift
+    // (!offset & ((1 << 20) - 1)) + 1)
 }
