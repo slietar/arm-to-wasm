@@ -1,6 +1,8 @@
 use std::borrow::Cow;
+use binaryen::ffi as by;
 use std::collections::HashSet;
-use std::io::{Read, Cursor};
+use std::ffi::CString;
+use std::io::{Cursor, Read, Write};
 use std::fs::File;
 use disarm64::decoder::{self, Operation};
 use mach_object::{LoadCommand, MachCommand, OFile, SectionAttributes};
@@ -33,7 +35,41 @@ impl std::fmt::Display for CompilationError {
 
 
 fn main() {
-    run().unwrap();
+    unsafe {
+        // run().unwrap();
+        let module = by::BinaryenModuleCreate();
+        // by::BinaryenModuleRef module = by::BinaryenModuleCreate();
+
+        // Create a function type for  i32 (i32, i32)
+        let mut types = [by::BinaryenTypeInt32(), by::BinaryenTypeInt32()];
+        // eprintln!("{:?}", types[0] as *mut by::BinaryenType);
+        let params = by::BinaryenTypeCreate(types.as_mut_ptr(), types.len() as u32);
+        let results = by::BinaryenTypeInt32();
+
+        // Get the 0 and 1 arguments, and add them
+        let x = by::BinaryenLocalGet(module, 0, by::BinaryenTypeInt32());
+        let y = by::BinaryenLocalGet(module, 2, by::BinaryenTypeInt32());
+        let add = by::BinaryenBinary(module, by::BinaryenAddInt32(), x, y);
+
+        // Create the add function
+        // Note: no additional local variables
+        // Note: no basic blocks here, we are an AST. The function body is just an
+        // expression node.
+        let s = CString::new("adder").unwrap();
+        let adder = by::BinaryenAddFunction(module, s.as_ptr(), params, results, std::ptr::null_mut::<by::BinaryenType>(), 0, add);
+
+        // Print it out
+        by::BinaryenModulePrint(module);
+
+        let mut output = vec![0u8; 1024];
+        let written = by::BinaryenModuleWrite(module, output.as_mut_ptr() as *mut i8, output.len());
+
+        // Clean up the module, which owns all the objects we created above
+        by::BinaryenModuleDispose(module);
+
+        let mut output_file = File::create("output.wasm").unwrap();
+        output_file.write_all(&output[..written]).unwrap();
+    }
 }
 
 
@@ -172,6 +208,11 @@ fn run() -> Result<(), CompilationError> {
     }
 
     eprintln!("{:?}", entries.len());
+
+    let mut p = entries.iter().collect::<Vec<_>>();
+    p.sort();
+    let p = p.windows(2).map(|v| v[1] - v[0]).collect::<Vec<_>>();
+    eprintln!("{:?}", p);
 
     Ok(())
 }

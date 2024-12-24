@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+binaryen = "0.13.0"
+disarm64 = "0.1.20"
 mach_object = "0.1.17"
