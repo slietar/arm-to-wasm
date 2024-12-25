@@ -35,57 +35,9 @@ impl std::fmt::Display for CompilationError {
 
 
 fn main() {
-    unsafe { run().unwrap(); }
-    return;
-
-/*     unsafe {
-        let module = by::BinaryenModuleCreate();
-        // by::BinaryenModuleRef module = by::BinaryenModuleCreate();
-
-        // Create a function type for  i32 (i32, i32)
-        let mut types = [by::BinaryenTypeInt32(), by::BinaryenTypeInt32()];
-        // eprintln!("{:?}", types[0] as *mut by::BinaryenType);
-        let params = by::BinaryenTypeCreate(types.as_mut_ptr(), types.len() as u32);
-        let results = by::BinaryenTypeInt32();
-
-        let loopp = by::BinaryenLoop(module, CString::new("loop").unwrap().as_ptr(),
-            by::BinaryenBlock(module, CString::new("body").unwrap().as_ptr(),
-                [
-                    by::BinaryenLocalSet(module, 2, by::BinaryenBinary(module, by::BinaryenSubInt32(),
-                        by::BinaryenLocalGet(module, 0, by::BinaryenTypeInt32()),
-                        by::BinaryenConst(module, by::BinaryenLiteralInt32(1))
-                    )),
-                    by::BinaryenReturn(module, by::BinaryenLocalGet(module, 2, by::BinaryenTypeInt32()))
-                ].as_mut_ptr(), 2, by::BinaryenTypeInt32()
-            )
-        );
-
-        // Get the 0 and 1 arguments, and add them
-        let x = by::BinaryenLocalGet(module, 0, by::BinaryenTypeInt32());
-        let y = by::BinaryenLocalGet(module, 2, by::BinaryenTypeInt32());
-        let add = by::BinaryenBinary(module, by::BinaryenAddInt32(), x, y);
-
-        let mut var_types = [by::BinaryenTypeInt32()];
-
-        // Create the add function
-        // Note: no additional local variables
-        // Note: no basic blocks here, we are an AST. The function body is just an
-        // expression node.
-        let s = CString::new("adder").unwrap();
-        let adder = by::BinaryenAddFunction(module, s.as_ptr(), params, results, var_types.as_mut_ptr(), var_types.len() as u32, loopp);
-
-        // Print it out
-        by::BinaryenModulePrint(module);
-
-        let mut output = vec![0u8; 1024];
-        let written = by::BinaryenModuleWrite(module, output.as_mut_ptr() as *mut i8, output.len());
-
-        // Clean up the module, which owns all the objects we created above
-        by::BinaryenModuleDispose(module);
-
-        let mut output_file = File::create("output.wasm").unwrap();
-        output_file.write_all(&output[..written]).unwrap();
-    } */
+    unsafe {
+        run().unwrap();
+    }
 }
 
 
@@ -108,13 +60,13 @@ unsafe fn run() -> Result<(), CompilationError> {
         return Err(CompilationError("not a Mach-O file".into()));
     };
 
-    let _entry_command = commands
+    let entry_addr = commands
         .iter()
-        .find(|cmd| {
-            if let MachCommand(LoadCommand::EntryPoint { .. }, _) = cmd {
-                true
+        .find_map(|cmd| {
+            if let MachCommand(LoadCommand::EntryPoint { entryoff, .. }, _) = cmd {
+                Some(*entryoff)
             } else {
-                false
+                None
             }
         })
         .ok_or(CompilationError("no entry point".into()))?;
@@ -230,10 +182,11 @@ unsafe fn run() -> Result<(), CompilationError> {
     // let p = p.windows(2).map(|v| v[1] - v[0]).collect::<Vec<_>>();
     // eprintln!("{:?}", p);
 
-    let module = by::BinaryenModuleCreate();
-    // by::BinaryenModuleRef module = by::BinaryenModuleCreate();
 
-    let data1 = CString::new("foo").unwrap();
+    let module = by::BinaryenModuleCreate();
+
+    by::BinaryenModuleSetFeatures(module, by::BinaryenFeatureMemory64());
+
 
     let mut segment_names = Vec::new();
     let mut segment_datas = Vec::new();
@@ -294,10 +247,8 @@ unsafe fn run() -> Result<(), CompilationError> {
         }
     }
 
-    // eprintln!("{:?}", segment_datas);
-    // eprintln!("{:?}", buffer.as_ptr());
-    // eprintln!("{:?}", &buffer as *const _);
 
+    // Initialize memory
 
     const PAGE_SIZE: usize = 65_536;
 
@@ -306,7 +257,7 @@ unsafe fn run() -> Result<(), CompilationError> {
     by::BinaryenSetMemory(
         module,
         mem_size.div_ceil(PAGE_SIZE) as u32,
-        u32::MAX,
+        std::mem::transmute(-1),
         std::ptr::null(),
         segment_names.iter().map(|name| name.as_ptr()).collect::<Vec<_>>().as_mut_ptr(),
         segment_datas.as_mut_ptr() as *mut *const i8,
@@ -319,7 +270,166 @@ unsafe fn run() -> Result<(), CompilationError> {
         emul_mem_name.as_ptr(),
     );
 
+
+    // Translate instructions
+
+    let loop_name = CString::new("loop").unwrap();
+    let loop_body_name = CString::new("body").unwrap();
+
+    let current_pointer_expr = by::BinaryenLocalGet(module, 0, by::BinaryenTypeInt64());
+
+    let loop_ = by::BinaryenLoop(module, loop_name.as_ptr(),
+        by::BinaryenBlock(module, loop_body_name.as_ptr(),
+            [
+                by::BinaryenIf(
+                    module,
+                    by::BinaryenBinary(
+                        module,
+                        by::BinaryenEqInt64(),
+                        current_pointer_expr,
+                        by::BinaryenConst(module, by::BinaryenLiteralInt64(0)),
+                    ),
+                    by::BinaryenNop(module),
+                    by::BinaryenNop(module),
+                ),
+                by::BinaryenBreak(
+                    module,
+                    loop_name.as_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+            ].as_mut_ptr(), 2, by::BinaryenTypeNone()
+        )
+    );
+
+
+    // Create functions
+
+    let mut var_types = [by::BinaryenTypeInt64()];
+
+    let main_func_name = CString::new("_main").unwrap();
+    let _main_func = by::BinaryenAddFunction(
+        module,
+        main_func_name.as_ptr(),
+        by::BinaryenTypeInt64(),
+        by::BinaryenTypeNone(),
+        var_types.as_mut_ptr(),
+        var_types.len() as u32,
+        loop_,
+    );
+
+
+    let entry_func_body = by::BinaryenCall(
+        module,
+        main_func_name.as_ptr(),
+        [by::BinaryenConst(module, by::BinaryenLiteralInt64(std::mem::transmute(entry_addr)))].as_mut_ptr(),
+        1,
+        by::BinaryenTypeNone(),
+    );
+
+    let entry_func_name = CString::new("_entry").unwrap();
+
+    let _entry_func = by::BinaryenAddFunction(
+        module,
+        entry_func_name.as_ptr(),
+        by::BinaryenTypeNone(),
+        by::BinaryenTypeNone(),
+        [].as_mut_ptr(),
+        0,
+        entry_func_body,
+    );
+
+    let _export = by::BinaryenAddExport(module, entry_func_name.as_ptr(), entry_func_name.as_ptr());
+
+
+/*     for &MachCommand(ref cmd, _cmdsize) in &commands {
+        match cmd {
+            LoadCommand::Segment64 { ref sections, .. } => {
+                for section in sections {
+                    let attributes = section.flags.sect_attrs();
+
+                    if attributes.contains(SectionAttributes::S_ATTR_PURE_INSTRUCTIONS) {
+                        entries.insert(section.addr as u64);
+
+                        for instruction_index in 0..(section.size / INSTRUCTION_SIZE) {
+                            let current_addr = (section.addr as u64) + (instruction_index * INSTRUCTION_SIZE) as u64;
+                            let offset = (section.offset as usize + instruction_index * INSTRUCTION_SIZE) as usize;
+                            let instruction_encoded = u32::from_le_bytes(buffer[offset..(offset + 4)].try_into().unwrap());
+                            let instruction = match disarm64::decoder::decode(instruction_encoded) {
+                                Some(instruction) => instruction,
+                                None => continue,
+                            };
+
+                            // use disarm64_defn::defn::InsnOpcode;
+                            // let def = instruction.definition();
+                            // eprintln!("{:?}", def);
+                            // eprintln!("{instruction:?}");
+
+                            match instruction.operation {
+                                // Operation::LDST_POS(decoder::LDST_POS::LDR_Rt_ADDR_UIMM12(inst)) => {
+                                //     eprintln!("{instruction}");
+                                //     eprintln!(">> {:?}", inst);
+                                // },
+                                Operation::BRANCH_IMM(decoder::BRANCH_IMM::B_ADDR_PCREL26(inst)) => {
+                                    let addr_offset = inst.imm26() as u64;
+                                    entries.insert(current_addr + (addr_offset << 2));
+
+                                    // eprintln!("{instruction} {:x} {:x}", current_addr, current_addr + (target << 2));
+                                    // entries.insert(target);
+                                },
+                                Operation::CONDBRANCH(decoder::CONDBRANCH::B__ADDR_PCREL19(inst)) => {
+                                    let addr_offset = inst.imm19() as u64;
+                                    entries.insert(current_addr + (addr_offset << 2));
+                                },
+                                Operation::BRANCH_REG(decoder::BRANCH_REG::RET_Rn(inst)) => {
+                                    let _reg = inst.rn();
+
+                                    // eprintln!(">> {:?}", reg);
+                                    // let target = instruction.operands[0].value.unwrap();
+                                    // entries.insert(target);
+                                },
+                                _ => {},
+                            }
+                        }
+                    }
+                }
+            },
+            LoadCommand::SymTab { symoff, nsyms, stroff, .. } => {
+                let entry_size = 16;
+
+                for entry_index in 0..(*nsyms) {
+                    let offset = (symoff + entry_index * entry_size) as usize;
+                    let str_offset = (stroff + u32::from_le_bytes(buffer[offset..(offset + 4)].try_into().unwrap())) as usize;
+                    let str_length = buffer[str_offset..].iter().position(|&r| r == b'\0').unwrap();
+                    let _name = unsafe { String::from_utf8_unchecked(buffer[str_offset..(str_offset + str_length)].to_vec()) };
+
+                    let addr = u64::from_le_bytes(buffer[(offset + 8)..(offset + 16)].try_into().unwrap());
+                    entries.insert(addr);
+
+                    // eprintln!("{:?}", name);
+                    // eprintln!("{:x?}", &buffer[(offset + 8)..(offset + 16)]);
+
+                    // let name = String::from_utf8_lossy(&buf[str_offset..(str_offset + str_length)]);
+
+                    // if !name.starts_with("__") {
+                    //     // let x = &buf[(symoff + entry_index * entry_size) as usize..(symoff + (entry_index + 1) * entry_size) as usize];
+                    //     // eprintln!("{:x?}", x);
+
+                    //     println!("{}", name);
+                    // }
+
+                    // c.push(str_offset);
+                }
+            },
+            _ => {},
+        }
+    } */
+
+
+    // Emit WASM binary
+
     by::BinaryenModulePrint(module);
+    by::BinaryenModuleValidate(module);
 
     let mut output = vec![0u8; 10_000_000];
     let written = by::BinaryenModuleWrite(module, output.as_mut_ptr() as *mut i8, output.len());
