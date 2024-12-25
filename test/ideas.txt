@@ -1,0 +1,2 @@
+
+If breaking to an unknown point, emulate until reaching a known point.
