@@ -40,23 +40,63 @@ fn main() {
         let module = by::BinaryenModuleCreate();
         // by::BinaryenModuleRef module = by::BinaryenModuleCreate();
 
+        let data1 = CString::new("foo").unwrap();
+
+        let mut segment_names = [CString::new("hi").unwrap()];
+        let mut segment_datas = [data1];
+        let mut segment_passives = [false];
+        let mut segment_offsets = [by::BinaryenConst(module, by::BinaryenLiteralInt32(0))];
+        // let mut segment_sizes = [by::BinaryenLiteralInt32(4)];
+        let mut segment_sizes = [3];
+
+        by::BinaryenSetMemory(
+            module,
+            1,
+            256,
+            // CString::new("bar").unwrap().as_ptr(),
+            std::ptr::null(),
+            segment_names.as_mut_ptr() as *mut *const i8,
+            segment_datas.as_mut_ptr() as *mut *const i8,
+            segment_passives.as_mut_ptr(),
+            segment_offsets.as_mut_ptr(),
+            segment_sizes.as_mut_ptr(),
+            segment_names.len() as u32,
+            false,
+            true,
+            CString::new("memName").unwrap().as_ptr(),
+        );
+
         // Create a function type for  i32 (i32, i32)
         let mut types = [by::BinaryenTypeInt32(), by::BinaryenTypeInt32()];
         // eprintln!("{:?}", types[0] as *mut by::BinaryenType);
         let params = by::BinaryenTypeCreate(types.as_mut_ptr(), types.len() as u32);
         let results = by::BinaryenTypeInt32();
 
+        let loopp = by::BinaryenLoop(module, CString::new("loop").unwrap().as_ptr(),
+            by::BinaryenBlock(module, CString::new("body").unwrap().as_ptr(),
+                [
+                    by::BinaryenLocalSet(module, 2, by::BinaryenBinary(module, by::BinaryenSubInt32(),
+                        by::BinaryenLocalGet(module, 0, by::BinaryenTypeInt32()),
+                        by::BinaryenConst(module, by::BinaryenLiteralInt32(1))
+                    )),
+                    by::BinaryenReturn(module, by::BinaryenLocalGet(module, 2, by::BinaryenTypeInt32()))
+                ].as_mut_ptr(), 2, by::BinaryenTypeInt32()
+            )
+        );
+
         // Get the 0 and 1 arguments, and add them
         let x = by::BinaryenLocalGet(module, 0, by::BinaryenTypeInt32());
         let y = by::BinaryenLocalGet(module, 2, by::BinaryenTypeInt32());
         let add = by::BinaryenBinary(module, by::BinaryenAddInt32(), x, y);
+
+        let mut var_types = [by::BinaryenTypeInt32()];
 
         // Create the add function
         // Note: no additional local variables
         // Note: no basic blocks here, we are an AST. The function body is just an
         // expression node.
         let s = CString::new("adder").unwrap();
-        let adder = by::BinaryenAddFunction(module, s.as_ptr(), params, results, std::ptr::null_mut::<by::BinaryenType>(), 0, add);
+        let adder = by::BinaryenAddFunction(module, s.as_ptr(), params, results, var_types.as_mut_ptr(), var_types.len() as u32, loopp);
 
         // Print it out
         by::BinaryenModulePrint(module);
