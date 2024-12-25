@@ -35,36 +35,12 @@ impl std::fmt::Display for CompilationError {
 
 
 fn main() {
-    unsafe {
-        // run().unwrap();
+    unsafe { run().unwrap(); }
+    return;
+
+/*     unsafe {
         let module = by::BinaryenModuleCreate();
         // by::BinaryenModuleRef module = by::BinaryenModuleCreate();
-
-        let data1 = CString::new("foo").unwrap();
-
-        let mut segment_names = [CString::new("hi").unwrap()];
-        let mut segment_datas = [data1];
-        let mut segment_passives = [false];
-        let mut segment_offsets = [by::BinaryenConst(module, by::BinaryenLiteralInt32(0))];
-        // let mut segment_sizes = [by::BinaryenLiteralInt32(4)];
-        let mut segment_sizes = [3];
-
-        by::BinaryenSetMemory(
-            module,
-            1,
-            256,
-            // CString::new("bar").unwrap().as_ptr(),
-            std::ptr::null(),
-            segment_names.as_mut_ptr() as *mut *const i8,
-            segment_datas.as_mut_ptr() as *mut *const i8,
-            segment_passives.as_mut_ptr(),
-            segment_offsets.as_mut_ptr(),
-            segment_sizes.as_mut_ptr(),
-            segment_names.len() as u32,
-            false,
-            true,
-            CString::new("memName").unwrap().as_ptr(),
-        );
 
         // Create a function type for  i32 (i32, i32)
         let mut types = [by::BinaryenTypeInt32(), by::BinaryenTypeInt32()];
@@ -109,16 +85,16 @@ fn main() {
 
         let mut output_file = File::create("output.wasm").unwrap();
         output_file.write_all(&output[..written]).unwrap();
-    }
+    } */
 }
 
 
-fn run() -> Result<(), CompilationError> {
+unsafe fn run() -> Result<(), CompilationError> {
     // let mut file = File::open("/bin/sh").unwrap();
     // let mut file = File::open("test/molcv").unwrap();
     // let mut file = File::open("/opt/homebrew/lib/python3.11/site-packages/numpy/random/_bounded_integers.cpython-311-darwin.so").unwrap();
-    let mut file = File::open("simple-lib/target/debug/simple-lib").unwrap();
-    // let mut file = File::open("test/hello").unwrap();
+    // let mut file = File::open("simple-lib/target/debug/simple-lib").unwrap();
+    let mut file = File::open("test/hello").unwrap();
 
     let mut buffer = Vec::new();
     let size = file.read_to_end(&mut buffer).unwrap();
@@ -247,12 +223,114 @@ fn run() -> Result<(), CompilationError> {
         }
     }
 
-    eprintln!("{:?}", entries.len());
+    // eprintln!("{:?}", entries.len());
 
-    let mut p = entries.iter().collect::<Vec<_>>();
-    p.sort();
-    let p = p.windows(2).map(|v| v[1] - v[0]).collect::<Vec<_>>();
-    eprintln!("{:?}", p);
+    // let mut p = entries.iter().collect::<Vec<_>>();
+    // p.sort();
+    // let p = p.windows(2).map(|v| v[1] - v[0]).collect::<Vec<_>>();
+    // eprintln!("{:?}", p);
+
+    let module = by::BinaryenModuleCreate();
+    // by::BinaryenModuleRef module = by::BinaryenModuleCreate();
+
+    let data1 = CString::new("foo").unwrap();
+
+    let mut segment_names = Vec::new();
+    let mut segment_datas = Vec::new();
+    let mut segment_passives = Vec::new();
+    let mut segment_offsets = Vec::new();
+    // let mut segment_sizes = [by::BinaryenLiteralInt32(4)];
+    let mut segment_sizes = Vec::new();
+
+    let mut mem_size = 0;
+
+
+    for &MachCommand(ref cmd, _cmdsize) in &commands {
+        match cmd {
+            LoadCommand::Segment64 { ref sections, segname, .. } => {
+                // eprintln!("segment: {}", segname);
+                // eprintln!("  ({} -> {})", vmaddr, vmsize);
+                // eprintln!("  {:?}", flags);
+
+                for sect in sections {
+                    if segment_names.len() >= 2 {
+                        // break;
+                    }
+
+                    // if sect.offset == 7816 { continue; }
+
+                    if sect.offset == 0 {
+                        continue;
+                    }
+
+                    // segment_names.push(CString::new(format!("a{}", segment_names.len())).unwrap());
+                    segment_names.push(CString::new(format!("{segname}/{}", sect.sectname)).unwrap());
+
+                    // eprintln!("{:?}", sect.offset);
+                    // eprintln!("{:?}", buffer.as_mut_ptr().add(sect.offset as usize));
+
+                    // segment_datas.push(&buffer[(sect.offset as usize)..(sect.offset as usize + sect.size)].as_mut_ptr());
+                    segment_datas.push(buffer.as_ptr().offset(sect.offset as isize)); //.add(sect.offset as usize));
+                    // segment_datas.push(0x140009e88 as *mut *const i8);
+
+                    segment_passives.push(false);
+                    segment_offsets.push(by::BinaryenConst(module, by::BinaryenLiteralInt64(sect.addr as i64)));
+                    segment_sizes.push(sect.size as u32);
+                    // segment_sizes.push(1);
+
+                    mem_size = mem_size.max(sect.addr + sect.size);
+
+                    // eprintln!("  section: {}", sect.sectname);
+                    // eprintln!("    {}, {}", sect.addr, sect.size);
+                    // eprintln!("    {}", sect.offset);
+                    // // eprintln!("    {:0>32b}", <SectionFlags as Into<u32>>::into(sect.flags));
+                    // eprintln!("    {:?}", sect.flags.sect_attrs());
+                    // eprintln!("    {:?}", sect.flags.sect_type());
+                }
+
+                // for section in sections { }
+            },
+            _ => {},
+        }
+    }
+
+    // eprintln!("{:?}", segment_datas);
+    // eprintln!("{:?}", buffer.as_ptr());
+    // eprintln!("{:?}", &buffer as *const _);
+
+
+    const PAGE_SIZE: usize = 65_536;
+
+    let emul_mem_name = CString::new("emul_mem").unwrap();
+
+    by::BinaryenSetMemory(
+        module,
+        mem_size.div_ceil(PAGE_SIZE) as u32,
+        u32::MAX,
+        std::ptr::null(),
+        segment_names.iter().map(|name| name.as_ptr()).collect::<Vec<_>>().as_mut_ptr(),
+        segment_datas.as_mut_ptr() as *mut *const i8,
+        segment_passives.as_mut_ptr(),
+        segment_offsets.as_mut_ptr(),
+        segment_sizes.as_mut_ptr(),
+        segment_names.len() as u32,
+        false,
+        true,
+        emul_mem_name.as_ptr(),
+    );
+
+    by::BinaryenModulePrint(module);
+
+    let mut output = vec![0u8; 10_000_000];
+    let written = by::BinaryenModuleWrite(module, output.as_mut_ptr() as *mut i8, output.len());
+
+    // Clean up the module, which owns all the objects we created above
+    by::BinaryenModuleDispose(module);
+
+
+    let mut output_file = File::create("output.wasm").unwrap();
+    output_file.write_all(&output[..written]).unwrap();
+
 
     Ok(())
 }
