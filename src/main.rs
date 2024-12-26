@@ -262,16 +262,19 @@ unsafe fn run() -> Result<(), CompilationError> {
         }
     }
 
+    let special_mem_addr = (mem_size.div_ceil(PAGE_SIZE) * PAGE_SIZE) as i64;
+
 
     const PAGE_SIZE: usize = 65_536;
 
-    let emul_mem_name = CString::new("emul_mem").unwrap();
+    let mem_name_internal = CString::new("emul_mem").unwrap();
+    let mem_name_exported = CString::new("memory").unwrap();
 
     by::BinaryenSetMemory(
         module,
-        mem_size.div_ceil(PAGE_SIZE) as u32,
+        mem_size.div_ceil(PAGE_SIZE) as u32 + 1, // Reserve 1 page for special use
         std::mem::transmute(-1),
-        std::ptr::null(),
+        mem_name_exported.as_ptr(),
         segment_names.iter().map(|name| name.as_ptr()).collect::<Vec<_>>().as_mut_ptr(),
         segment_datas.as_mut_ptr() as *mut *const i8,
         segment_passives.as_mut_ptr(),
@@ -280,7 +283,34 @@ unsafe fn run() -> Result<(), CompilationError> {
         segment_names.len() as u32,
         false,
         true,
-        emul_mem_name.as_ptr(),
+        // mem_name.as_ptr(),
+        mem_name_internal.as_ptr(),
+    );
+
+    // For WASI
+    // by::BinaryenAddMemoryExport(module, mem_name.as_ptr(), emul_mem_name.as_ptr());
+
+
+    // Import WASI functions
+
+    let wasi_prefix = CString::new("wasi_snapshot_preview1").unwrap();
+    let wasi_filesystem_write_name = CString::new("fd_write").unwrap();
+
+    let mut wasi_filesystem_write_params = [
+        by::BinaryenTypeInt32(),
+        by::BinaryenTypeInt32(),
+        by::BinaryenTypeInt32(),
+        by::BinaryenTypeInt32(),
+    ];
+
+    // by::BinaryenAddFunctionImport(module, internalName, externalModuleName, externalBaseName, params, results);
+    by::BinaryenAddFunctionImport(
+        module,
+        wasi_filesystem_write_name.as_ptr(),
+        wasi_prefix.as_ptr(),
+        wasi_filesystem_write_name.as_ptr(),
+        by::BinaryenTypeCreate(wasi_filesystem_write_params.as_mut_ptr(), wasi_filesystem_write_params.len() as u32),
+        by::BinaryenTypeInt32(),
     );
 
 
@@ -288,19 +318,22 @@ unsafe fn run() -> Result<(), CompilationError> {
 
     // let entries: Vec<(u64, u64)> = vec![(0x100003f70, 0x100003f8c + 4)];
 
+    // let wasi_write = CString::new("wasi:write").unwrap();
+
+
     let mut branches = Vec::new();
     // let register_vars = (0..32).map(|reg_index| {
     //     by::BinaryenLocalGet(module, reg_index + 1, by::BinaryenInt64())
     // });
 
     const REGISTER_COUNT: usize = 32;
-    let get_reg_id = |reg_index: u32| reg_index + 1;
+    let get_reg_local_index = |reg_index: u32| reg_index + 1;
 
     for &MachCommand(ref cmd, _cmdsize) in &commands {
         match cmd {
             LoadCommand::Segment64 { ref sections, .. } => {
                 for section in sections {
-                    if section.addr == 0x100003f70 {
+                    if section.addr == 0x103f70 {
                         let mut commands = Vec::new();
                         let instruction_count = 8;
 
@@ -320,7 +353,7 @@ unsafe fn run() -> Result<(), CompilationError> {
                                     commands.push(
                                         by::BinaryenLocalSet(
                                             module,
-                                            get_reg_id(inst.rd()),
+                                            get_reg_local_index(inst.rd()),
                                             by::BinaryenConst(module, by::BinaryenLiteralInt64(inst.imm16_5() as i64)),
                                         )
                                     );
@@ -331,14 +364,121 @@ unsafe fn run() -> Result<(), CompilationError> {
                                     commands.push(
                                         by::BinaryenLocalSet(
                                             module,
-                                            get_reg_id(inst.rd()),
+                                            get_reg_local_index(inst.rd()),
                                             by::BinaryenConst(module, by::BinaryenLiteralInt64(current_addr as i64 + imm as i64)),
                                         )
                                     );
                                 },
-                                // Operation::EXCEPTION(decoder::EXCEPTION::SVC_EXCEPTION(inst)) => {
-                                //     // let number_expr =
-                                // },
+                                Operation::EXCEPTION(decoder::EXCEPTION::SVC_EXCEPTION(_inst)) => {
+                                    // let number_expr =
+                                    // let svc_type_reg_expr =
+                                    // let arguments = [
+                                    //     by::BinaryenLocalGet(module, get_reg_local_index(0), by::BinaryenInt64()),
+                                    //     by::BinaryenLocalGet(module, get_reg_local_index(1), by::BinaryenInt64()),
+                                    //     by::BinaryenLocalGet(module, get_reg_local_index(2), by::BinaryenInt64()),
+                                    // ];
+
+                                    let base_addr = special_mem_addr;
+                                    let len_addr = special_mem_addr + 4;
+                                    let ret_addr = special_mem_addr + 8;
+
+                                    let mut operands = [
+                                        by::BinaryenUnary(module, by::BinaryenWrapInt64(), by::BinaryenLocalGet(module, get_reg_local_index(0), by::BinaryenInt64())),
+                                        by::BinaryenConst(module, by::BinaryenLiteralInt32(base_addr as i32)),
+                                        by::BinaryenConst(module, by::BinaryenLiteralInt32(1)),
+                                        // by::BinaryenUnary(module, by::BinaryenWrapInt64(), arguments[0]),
+                                        // by::BinaryenUnary(module, by::BinaryenWrapInt64(), arguments[1]),
+                                        // by::BinaryenUnary(module, by::BinaryenWrapInt64(), arguments[2]),
+                                        // by::BinaryenConst(module, by::BinaryenLiteralInt32(0)),
+                                        // by::BinaryenConst(module, by::BinaryenLiteralInt32(0)),
+                                        // by::BinaryenConst(module, by::BinaryenLiteralInt32(1)),
+                                        // by::BinaryenConst(module, by::BinaryenLiteralInt32(0)),
+                                        by::BinaryenConst(module, by::BinaryenLiteralInt32(ret_addr as i32)),
+                                    ];
+
+                                    let mut children = [
+                                        // by::BinaryenStore(module, bytes, offset, align, ptr, value, type_, memoryName)
+                                        by::BinaryenStore(
+                                            module,
+                                            4,
+                                            0,
+                                            0,
+                                            by::BinaryenConst(module, by::BinaryenLiteralInt64(base_addr)),
+                                            by::BinaryenUnary(module, by::BinaryenWrapInt64(), by::BinaryenLocalGet(module, get_reg_local_index(1), by::BinaryenInt64())),
+                                            by::BinaryenInt32(),
+                                            mem_name_internal.as_ptr(),
+                                        ),
+                                        by::BinaryenStore(
+                                            module,
+                                            4,
+                                            0,
+                                            0,
+                                            by::BinaryenConst(module, by::BinaryenLiteralInt64(len_addr)),
+                                            by::BinaryenUnary(module, by::BinaryenWrapInt64(), by::BinaryenLocalGet(module, get_reg_local_index(2), by::BinaryenInt64())),
+                                            by::BinaryenInt32(),
+                                            mem_name_internal.as_ptr(),
+                                        ),
+                                        by::BinaryenDrop(
+                                            module,
+                                            by::BinaryenCall(
+                                                module,
+                                                wasi_filesystem_write_name.as_ptr(),
+                                                operands.as_mut_ptr(),
+                                                operands.len() as u32,
+                                                by::BinaryenInt32(),
+                                            ),
+                                        ),
+                                        by::BinaryenLocalSet(
+                                            module,
+                                            get_reg_local_index(0),
+                                            by::BinaryenUnary(
+                                                module,
+                                                by::BinaryenExtendUInt32(),
+                                                by::BinaryenLoad(
+                                                    module,
+                                                    4,
+                                                    false,
+                                                    0,
+                                                    0,
+                                                    by::BinaryenInt32(),
+                                                    by::BinaryenConst(module, by::BinaryenLiteralInt64(ret_addr)),
+                                                    mem_name_internal.as_ptr()
+                                                ),
+                                            ),
+                                        ),
+                                    ];
+
+                                    let ptr = children.as_mut_ptr();
+                                    let len = children.len() as u32;
+
+                                    commands.push(
+                                        // by::BinaryenBlock(module, name, children, numChildren, type_)
+                                        // by::BinaryenBlock(
+                                        //     module,
+                                        //     std::ptr::null_mut(),
+                                        //     ptr,
+                                        //     len,
+                                        //     by::BinaryenTypeNone(),
+                                        // ),
+                                        by::BinaryenIf(
+                                            module,
+                                            by::BinaryenBinary(
+                                                module,
+                                                by::BinaryenEqInt64(),
+                                                by::BinaryenLocalGet(module, get_reg_local_index(16), by::BinaryenTypeInt64()),
+                                                by::BinaryenConst(module, by::BinaryenLiteralInt64(0x4)),
+                                            ),
+                                            by::BinaryenBlock(
+                                                module,
+                                                std::ptr::null_mut(),
+                                                ptr,
+                                                len,
+                                                by::BinaryenTypeNone(),
+                                            ),
+                                            by::BinaryenNop(module),
+                                        ),
+                                    );
+                                },
                                 _ => {},
                             }
                         }
@@ -357,10 +497,15 @@ unsafe fn run() -> Result<(), CompilationError> {
                                 by::BinaryenBinary(
                                     module,
                                     by::BinaryenEqInt64(),
-                                    by::BinaryenLocalGet(module, 1, by::BinaryenTypeInt64()),
-                                    by::BinaryenConst(module, by::BinaryenLiteralInt64(0)),
+                                    by::BinaryenLocalGet(module, 0, by::BinaryenTypeInt64()),
+                                    by::BinaryenConst(module, by::BinaryenLiteralInt64(0x103f70)),
                                 ),
-                                by::BinaryenBlock(module, std::ptr::null_mut(), commands.as_mut_ptr(), commands.len() as u32, by::BinaryenTypeNone()),
+                                by::BinaryenBlock(
+                                    module,
+                                    std::ptr::null_mut(),
+                                    commands.as_mut_ptr(),
+                                    commands.len() as u32, by::BinaryenTypeNone()
+                                ),
                                 by::BinaryenNop(module),
                             )
                         );
@@ -413,7 +558,7 @@ unsafe fn run() -> Result<(), CompilationError> {
     let entry_func_body = by::BinaryenCall(
         module,
         main_func_name.as_ptr(),
-        [by::BinaryenConst(module, by::BinaryenLiteralInt64(std::mem::transmute(0x100000000 + entry_addr)))].as_mut_ptr(),
+        [by::BinaryenConst(module, by::BinaryenLiteralInt64(std::mem::transmute(0x100000 + entry_addr)))].as_mut_ptr(),
         1,
         by::BinaryenTypeNone(),
     );
