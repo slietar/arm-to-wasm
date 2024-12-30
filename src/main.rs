@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use binaryen::ffi as by;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::io::{Cursor, Read, Write};
 use std::fs::File;
@@ -79,110 +79,156 @@ unsafe fn run() -> Result<(), CompilationError> {
     // eprintln!("{:?}", entry_command);
 
 
-    // Find all instruction entries
+    // Find all symbols
 
-    const INSTRUCTION_SIZE: usize = 4;
+    const SYMBOL_TABLE_ENTRY_SIZE: u32 = 16;
 
-    let mut entries = HashSet::new();
+    let mut symbols = HashMap::new();
 
-    for &MachCommand(ref cmd, _cmdsize) in &commands {
-        match cmd {
-            LoadCommand::Segment64 { ref sections, .. } => {
-                // eprintln!("segment: {}", segname);
-                // eprintln!("  ({} -> {})", vmaddr, vmsize);
-                // eprintln!("  {:?}", flags);
+    for MachCommand(cmd, _cmdsize) in &commands {
+        if let LoadCommand::SymTab { symoff, nsyms, stroff, .. } = cmd {
+            symbols.reserve(*nsyms as usize);
 
-                // for ref sect in sections {
-                //     eprintln!("  section: {}", sect.sectname);
-                //     eprintln!("    {}, {}", sect.addr, sect.size);
-                //     eprintln!("    {}", sect.offset);
-                //     // eprintln!("    {:0>32b}", <SectionFlags as Into<u32>>::into(sect.flags));
-                //     eprintln!("    {:?}", sect.flags.sect_attrs());
-                //     eprintln!("    {:?}", sect.flags.sect_type());
-                // }
+            for entry_index in 0..(*nsyms) {
+                let offset = (symoff + entry_index * SYMBOL_TABLE_ENTRY_SIZE) as usize;
+                let str_offset = (stroff + u32::from_le_bytes(buffer[offset..(offset + 4)].try_into().unwrap())) as usize;
+                let str_length = buffer[str_offset..].iter().position(|&r| r == b'\0').unwrap();
+                let name = String::from_utf8(buffer[str_offset..(str_offset + str_length)].to_vec()).unwrap();
 
-                for section in sections {
-                    let attributes = section.flags.sect_attrs();
-
-                    if attributes.contains(SectionAttributes::S_ATTR_PURE_INSTRUCTIONS) {
-                        entries.insert(section.addr as u64);
-
-                        for instruction_index in 0..(section.size / INSTRUCTION_SIZE) {
-                            let current_addr = (section.addr as u64) + (instruction_index * INSTRUCTION_SIZE) as u64;
-                            let offset = (section.offset as usize + instruction_index * INSTRUCTION_SIZE) as usize;
-                            let instruction_encoded = u32::from_le_bytes(buffer[offset..(offset + 4)].try_into().unwrap());
-                            let instruction = match disarm64::decoder::decode(instruction_encoded) {
-                                Some(instruction) => instruction,
-                                None => continue,
-                            };
-
-                            // use disarm64_defn::defn::InsnOpcode;
-                            // let def = instruction.definition();
-                            // eprintln!("{:?}", def);
-                            // eprintln!("{instruction:?}");
-
-                            match instruction.operation {
-                                // Operation::LDST_POS(decoder::LDST_POS::LDR_Rt_ADDR_UIMM12(inst)) => {
-                                //     eprintln!("{instruction}");
-                                //     eprintln!(">> {:?}", inst);
-                                // },
-                                Operation::BRANCH_IMM(decoder::BRANCH_IMM::B_ADDR_PCREL26(inst)) => {
-                                    let addr_offset = inst.imm26() as u64;
-                                    entries.insert(current_addr + (addr_offset << 2));
-
-                                    // eprintln!("{instruction} {:x} {:x}", current_addr, current_addr + (target << 2));
-                                    // entries.insert(target);
-                                },
-                                Operation::CONDBRANCH(decoder::CONDBRANCH::B__ADDR_PCREL19(inst)) => {
-                                    let addr_offset = inst.imm19() as u64;
-                                    entries.insert(current_addr + (addr_offset << 2));
-                                    eprintln!("insert {:x?}", current_addr + (addr_offset << 2));
-                                },
-                                Operation::BRANCH_REG(decoder::BRANCH_REG::RET_Rn(inst)) => {
-                                    let _reg = inst.rn();
-
-                                    // eprintln!(">> {:?}", reg);
-                                    // let target = instruction.operands[0].value.unwrap();
-                                    // entries.insert(target);
-                                },
-                                _ => {},
-                            }
-                        }
-                    }
-                }
-            },
-            LoadCommand::SymTab { symoff, nsyms, stroff, .. } => {
-                let entry_size = 16;
-
-                for entry_index in 0..(*nsyms) {
-                    let offset = (symoff + entry_index * entry_size) as usize;
-                    let str_offset = (stroff + u32::from_le_bytes(buffer[offset..(offset + 4)].try_into().unwrap())) as usize;
-                    let str_length = buffer[str_offset..].iter().position(|&r| r == b'\0').unwrap();
-                    let _name = unsafe { String::from_utf8_unchecked(buffer[str_offset..(str_offset + str_length)].to_vec()) };
-
-                    let addr = u64::from_le_bytes(buffer[(offset + 8)..(offset + 16)].try_into().unwrap());
-                    entries.insert(addr);
-
-                    // eprintln!("{:?}", _name);
-                    // eprintln!("{:x?}", &buffer[(offset + 8)..(offset + 16)]);
-
-                    // let name = String::from_utf8_lossy(&buf[str_offset..(str_offset + str_length)]);
-
-                    // if !name.starts_with("__") {
-                    //     // let x = &buf[(symoff + entry_index * entry_size) as usize..(symoff + (entry_index + 1) * entry_size) as usize];
-                    //     // eprintln!("{:x?}", x);
-
-                    //     println!("{}", name);
-                    // }
-
-                    // c.push(str_offset);
-                }
-            },
-            _ => {},
+                let addr = u64::from_le_bytes(buffer[(offset + 8)..(offset + 16)].try_into().unwrap());
+                symbols.insert(name, addr);
+            }
         }
     }
 
-    // eprintln!("{:?}", entries);
+    // return Ok(());
+
+    let symbol_addrs = symbols.values().copied().collect::<HashSet<_>>();
+    // eprintln!("{:?}", symbol_addrs);
+
+
+    // Find block address ranges
+
+    const INSTRUCTION_SIZE: usize = 4;
+
+    let mut block_addr_ranges = Vec::new();
+
+    for &MachCommand(ref cmd, _cmdsize) in &commands {
+        // eprintln!("{:#?}", cmd);
+        // continue;
+
+        if let LoadCommand::Segment64 { maxprot, sections, .. } = cmd {
+            // eprintln!("segment: {}", segname);
+            // eprintln!("  ({} -> {})", vmaddr, vmsize);
+            // eprintln!("  {:?}", flags);
+
+            // for sect in sections {
+            //     eprintln!("  section: {}", sect.sectname);
+            //     eprintln!("    {}, {}", sect.addr, sect.size);
+            //     eprintln!("    {}", sect.offset);
+            //     // eprintln!("    {:0>32b}", <SectionFlags as Into<u32>>::into(sect.flags));
+            //     eprintln!("    {:?}", sect.flags.sect_attrs());
+            //     eprintln!("    {:?}", sect.flags.sect_type());
+            // }
+
+            // continue;
+
+            // Skip if no execute permission
+            if maxprot & 0x1 == 0 {
+                continue;
+            }
+
+            for section in sections {
+                let attributes = section.flags.sect_attrs();
+
+                if !attributes.contains(SectionAttributes::S_ATTR_SOME_INSTRUCTIONS) {
+                    continue;
+                }
+
+                // let mut start_addr = section.addr as u64;
+                // entries.insert(section.addr as u64);
+
+                let instruction_count = section.size / INSTRUCTION_SIZE;
+
+                let mut jump_addrs = HashSet::new();
+                let mut end_addr = section.addr as u64 + section.size as u64;
+
+                for instruction_index in 0..instruction_count {
+                    let instruction_addr = (section.addr as u64) + (instruction_index * INSTRUCTION_SIZE) as u64;
+
+                    // if symbol_addrs.contains(&instruction_addr) && (start_addr != instruction_addr) {
+                    //     entries.insert((start_addr, instruction_addr));
+                    //     start_addr = instruction_addr;
+                    // }
+
+                    let offset = (section.offset as usize + instruction_index * INSTRUCTION_SIZE) as usize;
+                    let instruction_encoded = u32::from_le_bytes(buffer[offset..(offset + INSTRUCTION_SIZE)].try_into().unwrap());
+                    let instruction = match disarm64::decoder::decode(instruction_encoded) {
+                        Some(instruction) => instruction,
+                        None => {
+                            end_addr = instruction_addr;
+                            break;
+                        },
+                    };
+
+                    if symbol_addrs.contains(&instruction_addr) {
+                        jump_addrs.insert(instruction_addr);
+                        continue;
+                    }
+
+                    // use disarm64_defn::defn::InsnOpcode;
+                    // let def = instruction.definition();
+                    // eprintln!("{:?}", def);
+                    // eprintln!("{instruction:?}");
+
+                    match instruction.operation {
+                        // Operation::LDST_POS(decoder::LDST_POS::LDR_Rt_ADDR_UIMM12(inst)) => {
+                        //     eprintln!("{instruction}");
+                        //     eprintln!(">> {:?}", inst);
+                        // },
+                        Operation::BRANCH_IMM(decoder::BRANCH_IMM::B_ADDR_PCREL26(inst)) => {
+                            let addr_offset = inst.imm26() as u64;
+                            jump_addrs.insert(instruction_addr + (addr_offset << 2));
+
+                            // eprintln!("{instruction} {:x} {:x}", current_addr, current_addr + (target << 2));
+                            // entries.insert(target);
+                        },
+                        Operation::CONDBRANCH(decoder::CONDBRANCH::B__ADDR_PCREL19(inst)) => {
+                            let addr_offset = inst.imm19() as u64;
+                            jump_addrs.insert(instruction_addr + (addr_offset << 2));
+                            // eprintln!("insert {:x?}", instruction_addr + (addr_offset << 2));
+                        },
+                        // Operation::BRANCH_REG(decoder::BRANCH_REG::RET_Rn(inst)) => {
+                        //     let _reg = inst.rn();
+
+                        //     // eprintln!(">> {:?}", reg);
+                        //     // let target = instruction.operands[0].value.unwrap();
+                        //     // entries.insert(target);
+                        // },
+                        _ => {},
+                    }
+                }
+
+                let mut jump_addrs_vec = jump_addrs.iter().copied().collect::<Vec<_>>();
+
+                jump_addrs_vec.push(end_addr);
+                jump_addrs_vec.sort();
+
+                for range_addrs in jump_addrs_vec.windows(2) {
+                    block_addr_ranges.push((range_addrs[0], range_addrs[1]));
+                }
+
+                // eprintln!("{:?}", jump_addrs);
+            }
+        }
+    }
+
+    // eprintln!("{:?}", symbols);
+    // eprintln!("{:x?}", block_addr_ranges);
+    // return Ok(());
+
+    // let entries = HashSet::<u64>::new();
+
 
     // for entry in &entries {
     //     eprintln!("{:x?}", entry);
@@ -316,11 +362,6 @@ unsafe fn run() -> Result<(), CompilationError> {
 
     // Translate instructions
 
-    // let entries: Vec<(u64, u64)> = vec![(0x100003f70, 0x100003f8c + 4)];
-
-    // let wasi_write = CString::new("wasi:write").unwrap();
-
-
     let mut branches = Vec::new();
     // let register_vars = (0..32).map(|reg_index| {
     //     by::BinaryenLocalGet(module, reg_index + 1, by::BinaryenInt64())
@@ -370,14 +411,6 @@ unsafe fn run() -> Result<(), CompilationError> {
                                     );
                                 },
                                 Operation::EXCEPTION(decoder::EXCEPTION::SVC_EXCEPTION(_inst)) => {
-                                    // let number_expr =
-                                    // let svc_type_reg_expr =
-                                    // let arguments = [
-                                    //     by::BinaryenLocalGet(module, get_reg_local_index(0), by::BinaryenInt64()),
-                                    //     by::BinaryenLocalGet(module, get_reg_local_index(1), by::BinaryenInt64()),
-                                    //     by::BinaryenLocalGet(module, get_reg_local_index(2), by::BinaryenInt64()),
-                                    // ];
-
                                     let base_addr = special_mem_addr;
                                     let len_addr = special_mem_addr + 4;
                                     let ret_addr = special_mem_addr + 8;
@@ -386,13 +419,6 @@ unsafe fn run() -> Result<(), CompilationError> {
                                         by::BinaryenUnary(module, by::BinaryenWrapInt64(), by::BinaryenLocalGet(module, get_reg_local_index(0), by::BinaryenInt64())),
                                         by::BinaryenConst(module, by::BinaryenLiteralInt32(base_addr as i32)),
                                         by::BinaryenConst(module, by::BinaryenLiteralInt32(1)),
-                                        // by::BinaryenUnary(module, by::BinaryenWrapInt64(), arguments[0]),
-                                        // by::BinaryenUnary(module, by::BinaryenWrapInt64(), arguments[1]),
-                                        // by::BinaryenUnary(module, by::BinaryenWrapInt64(), arguments[2]),
-                                        // by::BinaryenConst(module, by::BinaryenLiteralInt32(0)),
-                                        // by::BinaryenConst(module, by::BinaryenLiteralInt32(0)),
-                                        // by::BinaryenConst(module, by::BinaryenLiteralInt32(1)),
-                                        // by::BinaryenConst(module, by::BinaryenLiteralInt32(0)),
                                         by::BinaryenConst(module, by::BinaryenLiteralInt32(ret_addr as i32)),
                                     ];
 
@@ -583,8 +609,12 @@ unsafe fn run() -> Result<(), CompilationError> {
     by::BinaryenModulePrint(module);
     by::BinaryenModuleValidate(module);
 
+    by::BinaryenModuleOptimize(module);
+    by::BinaryenModulePrint(module);
+
     let mut output = vec![0u8; 10_000_000];
     let written = by::BinaryenModuleWrite(module, output.as_mut_ptr() as *mut i8, output.len());
+    assert!(written <= output.len());
 
     // Clean up the module, which owns all the objects we created above
     by::BinaryenModuleDispose(module);
