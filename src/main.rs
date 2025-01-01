@@ -273,7 +273,7 @@ unsafe fn run() -> Result<(), CompilationError> {
     let entry_addr = text_segment.address + commands
         .iter()
         .find_map(|cmd| {
-            if let MachCommand(LoadCommand::EntryPoint { entryoff, stacksize }, _) = cmd {
+            if let MachCommand(LoadCommand::EntryPoint { entryoff, .. }, _) = cmd {
                 Some(*entryoff)
             } else {
                 None
@@ -573,6 +573,14 @@ unsafe fn run() -> Result<(), CompilationError> {
         )
     }
 
+    unsafe fn access_reg64(module: *mut by::BinaryenModule, reg_index: u32, use_zero_reg: bool) -> by::BinaryenExpressionRef {
+        if use_zero_reg && reg_index == 31 {
+            return by::BinaryenConst(module, by::BinaryenLiteralInt64(0));
+        }
+
+        by::BinaryenLocalGet(module, get_reg_local_index(reg_index), by::BinaryenInt64())
+    }
+
 
     let loop_name = CString::new("loop").unwrap();
     let loop_body_name = CString::new("body").unwrap();
@@ -723,6 +731,137 @@ unsafe fn run() -> Result<(), CompilationError> {
                         ),
                     );
                 },
+
+                // STUR (store register unscaled)
+                Operation::LDST_UNSCALED(decoder::LDST_UNSCALED::STUR_Rt_ADDR_SIMM9(inst)) => {
+                    let variant64 = (instr_encoded & 0b01000000000000000000000000000000) != 0;
+
+                    if variant64 {
+                        todo!();
+                    }
+
+                    let rn = (instr_encoded >> 5) & 0b11111;
+                    let offset = sign_extend(inst.imm9(), 9) as i64;
+                    let ptr = access_reg64(module, rn, false);
+
+                    commands.push(
+                        by::BinaryenStore(
+                            module,
+                            4,
+                            if offset < 0 { 0 } else { offset as u32 },
+                            4,
+                            if offset < 0 {
+                                by::BinaryenBinary(
+                                    module,
+                                    by::BinaryenSubInt64(),
+                                    ptr,
+                                    by::BinaryenConst(module, by::BinaryenLiteralInt64(-offset)),
+                                )
+                            } else {
+                                ptr
+                            },
+                            access_reg32(module, inst.rt(), true),
+                            by::BinaryenInt32(),
+                            mem_name_internal.as_ptr(),
+                        ),
+                    );
+                },
+
+                // STP (store pair of registers)
+                // Signed offset only
+                Operation::LDSTPAIR_OFF(decoder::LDSTPAIR_OFF::STP_Rt_Rt2_ADDR_SIMM7(inst)) => {
+                    let variant64 = (instr_encoded & 0b10000000000000000000000000000000) != 0;
+
+                    if !variant64 {
+                        todo!();
+                    }
+
+                    let rn = (instr_encoded >> 5) & 0b11111;
+                    let get_pointer_expr = || by::BinaryenBinary(
+                        module,
+                        by::BinaryenAddInt64(),
+                        by::BinaryenLocalGet(module, get_reg_local_index(rn), by::BinaryenInt64()),
+                        by::BinaryenConst(module, by::BinaryenLiteralInt64(sign_extend(inst.imm7() << 3, 10) as i64)),
+                    );
+
+                    commands.push(
+                        by::BinaryenStore(
+                            module,
+                            8,
+                            0,
+                            8,
+                            get_pointer_expr(),
+                            access_reg64(module, inst.rt(), true),
+                            by::BinaryenInt64(),
+                            mem_name_internal.as_ptr(),
+                        ),
+                    );
+
+                    commands.push(
+                        by::BinaryenStore(
+                            module,
+                            8,
+                            8,
+                            8,
+                            get_pointer_expr(),
+                            access_reg64(module, inst.rt2(), true),
+                            by::BinaryenInt64(),
+                            mem_name_internal.as_ptr(),
+                        ),
+                    );
+                },
+
+                // LDP (load pair of registers)
+                Operation::LDSTPAIR_OFF(decoder::LDSTPAIR_OFF::LDP_Rt_Rt2_ADDR_SIMM7(inst)) => {
+                    let variant64 = (instr_encoded & 0b10000000000000000000000000000000) != 0;
+
+                    if !variant64 {
+                        todo!();
+                    }
+
+                    let rn = (instr_encoded >> 5) & 0b11111;
+                    let get_pointer_expr = || by::BinaryenBinary(
+                        module,
+                        by::BinaryenAddInt64(),
+                        access_reg64(module, rn, false),
+                        by::BinaryenConst(module, by::BinaryenLiteralInt64(sign_extend(inst.imm7() << 3, 10) as i64)),
+                    );
+
+                    commands.push(
+                        by::BinaryenLocalSet(
+                            module,
+                            get_reg_local_index(inst.rt()),
+                            by::BinaryenLoad(
+                                module,
+                                8,
+                                true,
+                                0,
+                                8,
+                                by::BinaryenInt64(),
+                                get_pointer_expr(),
+                                mem_name_internal.as_ptr(),
+                            )
+                        )
+                    );
+
+                    commands.push(
+                        by::BinaryenLocalSet(
+                            module,
+                            get_reg_local_index(inst.rt2()),
+                            by::BinaryenLoad(
+                                module,
+                                8,
+                                true,
+                                8,
+                                8,
+                                by::BinaryenInt64(),
+                                get_pointer_expr(),
+                                mem_name_internal.as_ptr(),
+                            )
+                        )
+                    );
+                },
+
                 Operation::MOVEWIDE(decoder::MOVEWIDE::MOVZ_Rd_HALF(inst)) => {
                     commands.push(
                         by::BinaryenLocalSet(
