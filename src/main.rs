@@ -175,7 +175,7 @@ unsafe fn run() -> Result<(), CompilationError> {
             // dyld_chained_starts_in_image
             let seg_count = u32::from_le_bytes(command_buffer[starts_offset..(starts_offset + 4)].try_into().unwrap()) as usize;
 
-            eprintln!("Segment count {}", seg_count);
+            // eprintln!("Segment count {}", seg_count);
 
             for seg_index in 0..seg_count {
                 let seg_info_offset = (u32::from_le_bytes(command_buffer[(starts_offset + 4 + seg_index * 4)..(starts_offset + 4 + seg_index * 4 + 4)].try_into().unwrap()) as usize) + starts_offset;
@@ -187,7 +187,7 @@ unsafe fn run() -> Result<(), CompilationError> {
                 let seg_offset = u64::from_le_bytes(command_buffer[(seg_info_offset + 8)..(seg_info_offset + 16)].try_into().unwrap()) as usize;
                 let seg_page_count = u16::from_le_bytes(command_buffer[(seg_info_offset + 20)..(seg_info_offset + 22)].try_into().unwrap()) as usize;
 
-                eprintln!("Segment {}, page count {}", seg_index, seg_page_count);
+                // eprintln!("Segment {}, page count {}", seg_index, seg_page_count);
 
                 for page_index in 0..seg_page_count {
                     let page_start = u16::from_le_bytes(command_buffer[(seg_info_offset + 22 + page_index * 2)..(seg_info_offset + 22 + page_index * 2 + 2)].try_into().unwrap()) as usize;
@@ -378,13 +378,15 @@ unsafe fn run() -> Result<(), CompilationError> {
                             jump_instr_indices.insert(instr_index + (inst.imm19() as usize));
                             // eprintln!("insert {:x?}", instruction_addr + (addr_offset << 2));
                         },
-                        // Operation::BRANCH_REG(decoder::BRANCH_REG::RET_Rn(inst)) => {
-                        //     let _reg = inst.rn();
+                        Operation::BRANCH_IMM(decoder::BRANCH_IMM::BL_ADDR_PCREL26(inst)) => {
+                            // Jump instruction
+                            jump_instr_indices.insert(
+                                ((instr_index as isize) + (sign_extend(inst.imm26(), 26) as isize)) as usize,
+                            );
 
-                        //     // eprintln!(">> {:?}", reg);
-                        //     // let target = instruction.operands[0].value.unwrap();
-                        //     // entries.insert(target);
-                        // },
+                            // Return instruction
+                            jump_instr_indices.insert(instr_index + 1);
+                        },
                         _ => {},
                     }
                 }
@@ -654,9 +656,35 @@ unsafe fn run() -> Result<(), CompilationError> {
                         ),
                     );
                 },
+                Operation::BRANCH_IMM(decoder::BRANCH_IMM::BL_ADDR_PCREL26(inst)) => {
+                    // eprintln!("{:?}", sign_extend(inst.imm26() << 2, 26) as i64);
+                    commands.push(
+                        by::BinaryenLocalSet(
+                            module,
+                            bl_reg_local_index,
+                            by::BinaryenConst(module, by::BinaryenLiteralInt64((instr_addr as i64) + (INSTRUCTION_SIZE as i64))),
+                        ),
+                    );
+
+                    commands.push(
+                        by::BinaryenLocalSet(
+                            module,
+                            pc_reg_local_index,
+                            by::BinaryenConst(module, by::BinaryenLiteralInt64((instr_addr as i64) /* + 4 */ + (sign_extend(inst.imm26() << 2, 28) as i64))),
+                        ),
+                    );
+
+                    commands.push(
+                        by::BinaryenBreak(
+                            module,
+                            loop_name.as_ptr(),
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        ),
+                    );
+                },
                 Operation::BRANCH_REG(decoder::BRANCH_REG::RET_Rn(inst)) => {
                     commands.push(
-                        // by::BinaryenReturn(module, std::ptr::null_mut()),
                         by::BinaryenLocalSet(
                             module,
                             pc_reg_local_index,
@@ -962,6 +990,7 @@ unsafe fn run() -> Result<(), CompilationError> {
 }
 
 
+// bit_count includes the sign bit
 fn sign_extend(value: u32, bit_count: u32) -> i32 {
     let shift = 32 - bit_count;
     (value << shift) as i32 >> shift
