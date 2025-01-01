@@ -1,7 +1,9 @@
+// mod syscalls;
+
 use std::borrow::Cow;
 use binaryen::ffi as by;
 use std::collections::{HashMap, HashSet};
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::io::{Cursor, Read, Write};
 use std::fs::File;
 use disarm64::decoder::{self, Operation};
@@ -47,7 +49,8 @@ unsafe fn run() -> Result<(), CompilationError> {
     // let mut file = File::open("test/molcv").unwrap();
     // let mut file = File::open("/opt/homebrew/lib/python3.11/site-packages/numpy/random/_bounded_integers.cpython-311-darwin.so").unwrap();
     // let mut file = File::open("simple-lib/target/debug/simple-lib").unwrap();
-    let mut file = File::open("test/hello").unwrap();
+    // let mut file = File::open("test/hello").unwrap();
+    let mut file = File::open("test/1/main").unwrap();
 
     let mut buffer = Vec::new();
     let size = file.read_to_end(&mut buffer).unwrap();
@@ -60,6 +63,89 @@ unsafe fn run() -> Result<(), CompilationError> {
     } else {
         return Err(CompilationError("not a Mach-O file".into()));
     };
+
+
+    for command in &commands {
+        if let MachCommand(LoadCommand::DyldChainedFixups(data), _) = command {
+            let command_buffer = &buffer[(data.off as usize)..((data.off + data.size) as usize)];
+            // let command_cursor = Cursor::new(command_buffer);
+            // let fixups_version = command_cursor.read_u32::<NativeEndian>();
+
+            // dyld_chained_fixups_header
+            let fixups_version = u32::from_le_bytes(command_buffer[0..4].try_into().unwrap());
+            let starts_offset = u32::from_le_bytes(command_buffer[4..8].try_into().unwrap()) as usize;
+            let imports_offset = u32::from_le_bytes(command_buffer[8..12].try_into().unwrap()) as usize;
+            let symbols_offset = u32::from_le_bytes(command_buffer[12..16].try_into().unwrap()) as usize;
+
+            // dyld_chained_starts_in_image
+            let seg_count = u32::from_le_bytes(command_buffer[starts_offset..(starts_offset + 4)].try_into().unwrap());
+            let seg2_info_offset = (u32::from_le_bytes(command_buffer[(starts_offset + 12)..(starts_offset + 12 + 4)].try_into().unwrap()) as usize) + starts_offset;
+
+            // For each segment
+            // dyld_chained_starts_in_segment
+            let seg2_size = u32::from_le_bytes(command_buffer[seg2_info_offset..(seg2_info_offset + 4)].try_into().unwrap());
+            let seg2_page_size = u16::from_le_bytes(command_buffer[(seg2_info_offset + 4)..(seg2_info_offset + 6)].try_into().unwrap());
+            let seg2_pointer_format = u16::from_le_bytes(command_buffer[(seg2_info_offset + 6)..(seg2_info_offset + 8)].try_into().unwrap());
+            let seg2_offset = u64::from_le_bytes(command_buffer[(seg2_info_offset + 8)..(seg2_info_offset + 16)].try_into().unwrap()) as usize;
+            let seg2_page_start = (u16::from_le_bytes(command_buffer[(seg2_info_offset + 22)..(seg2_info_offset + 24)].try_into().unwrap()) as usize) + seg2_offset;
+
+            eprintln!("Pointer format: {:?}", seg2_pointer_format);
+
+            // For each page
+            // dyld_chained_ptr_64_bind
+            let mut chain = seg2_page_start;
+
+            loop {
+                let bind_value = u64::from_le_bytes(buffer[chain..(chain + 8)].try_into().unwrap());
+                let bind = (bind_value >> 63) > 0;
+                let next = ((bind_value >> 51) & 0b1111_1111_1111) as usize;
+                let ordinal = (bind_value & 0xffffff) as usize;
+
+                // dyld_chained_import
+                let import_value = u32::from_le_bytes(command_buffer[(imports_offset + ordinal * 4)..(imports_offset + ordinal * 4 + 4)].try_into().unwrap());
+                let name_offset = (import_value >> 9) as usize;
+                let lib_ordinal = import_value & 0xf;
+                let symbol = CStr::from_ptr(command_buffer.as_ptr().offset((symbols_offset + name_offset) as isize) as *const i8);
+
+                // eprintln!("{:?}", &command_buffer[symbols_offset + name_offset]);
+                // eprintln!("{:?}", bind);
+                eprintln!("{:x?}", chain);
+                eprintln!("{:x?}", bind_value);
+                // eprintln!("{:x?} {:x?}", bind_value, ordinal);
+                eprintln!("{:x?}", import_value);
+                // eprintln!("{:?}", symbol);
+                // eprintln!("{:?}", lib_ordinal);
+                eprintln!("---");
+
+                if next == 0 {
+                    break;
+                }
+
+                chain += next * 4;
+            }
+
+            // eprintln!("{:?}", bind);
+            // eprintln!("{:x?}", import_value);
+            // eprintln!("{:?}", symbol);
+
+            // eprintln!("{:b?}", bind_value);
+            // eprintln!("{}", bind);
+
+
+
+            // let
+            // eprintln!("{:#?}", starts_offset);
+            // eprintln!("{:?}", seg_count);
+            // eprintln!("{:x?}", seg2_info_offset);
+            // eprintln!("{:x?}", seg2_size);
+            // eprintln!("{:x?}", seg2_page_size);
+            // eprintln!("{:x?}", seg2_pointer_format);
+            // eprintln!("{:x?}", seg2_offset);
+            // eprintln!("{:x?}", seg2_page_start);
+        }
+    }
+
+    return Ok(());
 
 
     // Find entry point
