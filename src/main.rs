@@ -38,19 +38,19 @@ impl std::fmt::Display for CompilationError {
 const INSTRUCTION_SIZE: usize = 4;
 
 #[derive(Debug)]
-struct Bind<'a> {
+pub struct Bind<'a> {
     address: u64,
     dylib_index: usize,
     symbol: &'a str,
 }
 
 #[derive(Debug)]
-struct DependencyDylib<'a> {
+pub struct DependencyDylib<'a> {
     name: &'a str,
 }
 
 #[derive(Debug)]
-struct Segment<'a> {
+pub struct Segment<'a> {
     address: u64,
     file_offset: usize,
     executable: bool,
@@ -58,7 +58,7 @@ struct Segment<'a> {
 }
 
 #[derive(Debug)]
-struct Section<'a> {
+pub struct Section<'a> {
     address: u64,
     buffer: &'a [u8],
     name: &'a str,
@@ -77,7 +77,7 @@ fn main() {
 unsafe fn run() -> Result<(), CompilationError> {
     // Load input Mach-O file
 
-    let mut file = File::open("/bin/ls").unwrap();
+    // let mut file = File::open("/bin/ls").unwrap();
     // let mut file = File::open("/bin/sh").unwrap();
     // let mut file = File::open("test/molcv").unwrap();
     // let mut file = File::open("/opt/homebrew/lib/python3.11/site-packages/numpy/random/_bounded_integers.cpython-311-darwin.so").unwrap();
@@ -165,11 +165,9 @@ unsafe fn run() -> Result<(), CompilationError> {
 
         if let MachCommand(LoadCommand::DyldChainedFixups(data), _) = command {
             let command_buffer = &buffer[(data.off as usize)..((data.off + data.size) as usize)];
-            // let command_cursor = Cursor::new(command_buffer);
-            // let fixups_version = command_cursor.read_u32::<NativeEndian>();
 
             // dyld_chained_fixups_header
-            let fixups_version = u32::from_le_bytes(command_buffer[0..4].try_into().unwrap());
+            let _fixups_version = u32::from_le_bytes(command_buffer[0..4].try_into().unwrap());
             let starts_offset = u32::from_le_bytes(command_buffer[4..8].try_into().unwrap()) as usize;
             let imports_offset = u32::from_le_bytes(command_buffer[8..12].try_into().unwrap()) as usize;
             let symbols_offset = u32::from_le_bytes(command_buffer[12..16].try_into().unwrap()) as usize;
@@ -182,25 +180,18 @@ unsafe fn run() -> Result<(), CompilationError> {
             for seg_index in 0..seg_count {
                 let seg_info_offset = (u32::from_le_bytes(command_buffer[(starts_offset + 4 + seg_index * 4)..(starts_offset + 4 + seg_index * 4 + 4)].try_into().unwrap()) as usize) + starts_offset;
 
-                // For each segment
                 // dyld_chained_starts_in_segment
-                let seg_size = u32::from_le_bytes(command_buffer[seg_info_offset..(seg_info_offset + 4)].try_into().unwrap());
+                let _seg_size = u32::from_le_bytes(command_buffer[seg_info_offset..(seg_info_offset + 4)].try_into().unwrap());
                 let seg_page_size = u16::from_le_bytes(command_buffer[(seg_info_offset + 4)..(seg_info_offset + 6)].try_into().unwrap()) as usize;
-                let seg_pointer_format = u16::from_le_bytes(command_buffer[(seg_info_offset + 6)..(seg_info_offset + 8)].try_into().unwrap());
+                let _seg_pointer_format = u16::from_le_bytes(command_buffer[(seg_info_offset + 6)..(seg_info_offset + 8)].try_into().unwrap());
                 let seg_offset = u64::from_le_bytes(command_buffer[(seg_info_offset + 8)..(seg_info_offset + 16)].try_into().unwrap()) as usize;
                 let seg_page_count = u16::from_le_bytes(command_buffer[(seg_info_offset + 20)..(seg_info_offset + 22)].try_into().unwrap()) as usize;
-
-                // eprintln!("{:x?}", seg_page_start);
-                // eprintln!("{:x?}", seg_page_count);
 
                 eprintln!("Segment {}, page count {}", seg_index, seg_page_count);
 
                 for page_index in 0..seg_page_count {
                     let page_start = u16::from_le_bytes(command_buffer[(seg_info_offset + 22 + page_index * 2)..(seg_info_offset + 22 + page_index * 2 + 2)].try_into().unwrap()) as usize;
 
-                    // eprintln!("Pointer format: {:?}", seg_pointer_format);
-
-                    // For each page
                     // dyld_chained_ptr_64_bind
                     let mut chain = seg_offset + seg_page_size * page_index + page_start;
 
@@ -208,7 +199,7 @@ unsafe fn run() -> Result<(), CompilationError> {
                         let bind_value = u64::from_le_bytes(buffer[chain..(chain + 8)].try_into().unwrap());
                         let bind = (bind_value >> 63) > 0;
                         let next = ((bind_value >> 51) & 0b1111_1111_1111) as usize;
-                        let addend = (bind_value >> 24) & 0xff;
+                        let _addend = (bind_value >> 24) & 0xff;
                         let ordinal = (bind_value & 0xffffff) as usize;
 
                         if bind {
@@ -244,25 +235,12 @@ unsafe fn run() -> Result<(), CompilationError> {
                     }
                 }
             }
-
-            // eprintln!("{:?}", bind);
-            // eprintln!("{:x?}", import_value);
-            // eprintln!("{:?}", symbol);
-
-            // eprintln!("{:b?}", bind_value);
-            // eprintln!("{}", bind);
         }
     }
 
-    // eprintln!("{:#?}", binds);
-    // eprintln!("{:#?}", segments);
-    // eprintln!("{:#?}", sections);
-
-    for bind in &binds {
-        eprintln!("0x{:x?} {}/{}", bind.address, dependency_dylibs[bind.dylib_index].name, bind.symbol);
-    }
-
-    return Ok(());
+    // for bind in &binds {
+    //     eprintln!("0x{:x?} {}/{}", bind.address, dependency_dylibs[bind.dylib_index].name, bind.symbol);
+    // }
 
 
     // Find symbols
@@ -287,10 +265,7 @@ unsafe fn run() -> Result<(), CompilationError> {
         }
     }
 
-    // return Ok(());
-
     let symbol_addrs = symbols.values().copied().collect::<HashSet<_>>();
-    // eprintln!("{:?}", symbol_addrs);
 
 
     // Find entry point
@@ -298,13 +273,12 @@ unsafe fn run() -> Result<(), CompilationError> {
     let entry_addr = text_segment.address + commands
         .iter()
         .find_map(|cmd| {
-            if let MachCommand(LoadCommand::EntryPoint { entryoff, .. }, _) = cmd {
+            if let MachCommand(LoadCommand::EntryPoint { entryoff, stacksize }, _) = cmd {
                 Some(*entryoff)
             } else {
                 None
             }
         })
-        // .unwrap_or(0);
         .ok_or(CompilationError("no entry point".into()))?;
 
 
@@ -516,17 +490,28 @@ unsafe fn run() -> Result<(), CompilationError> {
         }
     }
 
+    const PAGE_SIZE: usize = 65_536;
+
+    // Reserve space for special use
+    let special_mem_size = 1 << 16;
     let special_mem_addr = (mem_size.div_ceil(PAGE_SIZE) * PAGE_SIZE) as i64;
 
+    mem_size = (special_mem_addr + special_mem_size) as usize;
 
-    const PAGE_SIZE: usize = 65_536;
+    // Reserve space for the stack
+    let stack_addr = mem_size;
+    let stack_size = 1 << 16;
+    let stack_addr_end = stack_addr + stack_size;
+
+    mem_size += stack_size;
+
 
     let mem_name_internal = CString::new("emul_mem").unwrap();
     let mem_name_exported = CString::new("memory").unwrap();
 
     by::BinaryenSetMemory(
         module,
-        mem_size.div_ceil(PAGE_SIZE) as u32 + 1, // Reserve 1 page for special use
+        mem_size.div_ceil(PAGE_SIZE) as u32, // Reserve 1 page for special use
         std::mem::transmute(-1),
         mem_name_exported.as_ptr(),
         segment_names.iter().map(|name| name.as_ptr()).collect::<Vec<_>>().as_mut_ptr(),
@@ -570,16 +555,53 @@ unsafe fn run() -> Result<(), CompilationError> {
 
     // Translate instructions
 
+    fn get_reg_local_index(reg_index: u32) -> u32 {
+        reg_index + 1
+    }
+
+    unsafe fn access_reg32(module: *mut by::BinaryenModule, reg_index: u32, use_zero_reg: bool) -> by::BinaryenExpressionRef {
+        if use_zero_reg && reg_index == 31 {
+            return by::BinaryenConst(module, by::BinaryenLiteralInt32(0));
+        }
+
+        by::BinaryenUnary(
+            module,
+            by::BinaryenWrapInt64(),
+            by::BinaryenLocalGet(module, get_reg_local_index(reg_index), by::BinaryenInt64()),
+        )
+    }
+
+
     let loop_name = CString::new("loop").unwrap();
     let loop_body_name = CString::new("body").unwrap();
 
-    let mut branches = Vec::new();
-    // let register_vars = (0..32).map(|reg_index| {
-    //     by::BinaryenLocalGet(module, reg_index + 1, by::BinaryenInt64())
-    // });
-
     const REGISTER_COUNT: usize = 32;
-    let get_reg_local_index = |reg_index: u32| reg_index + 1;
+
+    let pc_reg_local_index = 0u32;
+    let bl_reg_local_index = get_reg_local_index(30);
+    let sp_reg_local_index = get_reg_local_index(31);
+
+    let return_pc_addr = 0;
+
+
+    let mut branches = Vec::new();
+
+    branches.push(
+        by::BinaryenIf(
+            module,
+            by::BinaryenBinary(
+                module,
+                by::BinaryenEqInt64(),
+                by::BinaryenLocalGet(module, pc_reg_local_index, by::BinaryenTypeInt64()),
+                by::BinaryenConst(module, by::BinaryenLiteralInt64(return_pc_addr as i64)),
+            ),
+            by::BinaryenReturn(
+                module,
+                std::ptr::null_mut(),
+            ),
+            by::BinaryenNop(module),
+        )
+    );
 
     for (section_index, instr_index_start, instr_index_end) in &block_addr_ranges {
         let section = &exec_sections[*section_index];
@@ -593,9 +615,86 @@ unsafe fn run() -> Result<(), CompilationError> {
             let instr_encoded = u32::from_le_bytes(section.buffer[(instr_index * INSTRUCTION_SIZE)..((instr_index + 1) * INSTRUCTION_SIZE)].try_into().unwrap());
             let instruction = disarm64::decoder::decode(instr_encoded).unwrap();
 
-            // eprintln!("{:?}", instruction);
-
             match instruction.operation {
+                Operation::ADDSUB_IMM(decoder::ADDSUB_IMM::ADD_Rd_SP_Rn_SP_AIMM(inst)) => {
+                    let variant64 = (instr_encoded & 0b10000000000000000000000000000000) != 0;
+
+                    if !variant64 {
+                        todo!();
+                    }
+
+                    let immediate = (inst.imm12() as i64) << (if inst.shift() != 0 { 12 } else { 0 });
+
+                    commands.push(
+                        by::BinaryenLocalSet(
+                            module,
+                            get_reg_local_index(inst.rd()),
+                            by::BinaryenBinary(
+                                module,
+                                by::BinaryenAddInt64(),
+                                by::BinaryenLocalGet(module, get_reg_local_index(inst.rn()), by::BinaryenInt64()),
+                                by::BinaryenConst(module, by::BinaryenLiteralInt64(immediate)),
+                            ),
+                        ),
+                    );
+                },
+                Operation::ADDSUB_IMM(decoder::ADDSUB_IMM::SUB_Rd_SP_Rn_SP_AIMM(inst)) => {
+                    let immediate = (inst.imm12() as i64) << (if inst.shift() != 0 { 12 } else { 0 });
+
+                    commands.push(
+                        by::BinaryenLocalSet(
+                            module,
+                            get_reg_local_index(inst.rd()),
+                            by::BinaryenBinary(
+                                module,
+                                by::BinaryenSubInt64(),
+                                by::BinaryenLocalGet(module, get_reg_local_index(inst.rn()), by::BinaryenInt64()),
+                                by::BinaryenConst(module, by::BinaryenLiteralInt64(immediate)),
+                            ),
+                        ),
+                    );
+                },
+                Operation::BRANCH_REG(decoder::BRANCH_REG::RET_Rn(inst)) => {
+                    commands.push(
+                        // by::BinaryenReturn(module, std::ptr::null_mut()),
+                        by::BinaryenLocalSet(
+                            module,
+                            pc_reg_local_index,
+                            by::BinaryenLocalGet(module, get_reg_local_index(inst.rn()), by::BinaryenInt64()),
+                        ),
+                    );
+
+                    commands.push(
+                        by::BinaryenBreak(
+                            module,
+                            loop_name.as_ptr(),
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        ),
+                    );
+                },
+                Operation::LDST_POS(decoder::LDST_POS::STR_Rt_ADDR_UIMM12(inst)) => {
+                    let variant64 = (instr_encoded & 0b01000000000000000000000000000000) != 0;
+
+                    if variant64 {
+                        todo!();
+                    }
+
+                    // 32 bit variant implementation
+                    // Unsigned offset only
+                    commands.push(
+                        by::BinaryenStore(
+                            module,
+                            4,
+                            (inst.imm12() as u32) << 2,
+                            4,
+                            by::BinaryenLocalGet(module, get_reg_local_index(inst.rn()), by::BinaryenInt64()),
+                            access_reg32(module, inst.rt(), true),
+                            by::BinaryenInt32(),
+                            mem_name_internal.as_ptr(),
+                        ),
+                    );
+                },
                 Operation::MOVEWIDE(decoder::MOVEWIDE::MOVZ_Rd_HALF(inst)) => {
                     commands.push(
                         by::BinaryenLocalSet(
@@ -718,6 +817,7 @@ unsafe fn run() -> Result<(), CompilationError> {
                     );
                 },
                 _ => {
+                    eprintln!("Warning: unknown instruction {:?} at 0x{:x}", instruction, instr_addr);
                     commands.push(
                         by::BinaryenUnreachable(module),
                     );
@@ -725,14 +825,16 @@ unsafe fn run() -> Result<(), CompilationError> {
             }
         }
 
+        // Update PC
         commands.push(
             by::BinaryenLocalSet(
                 module,
-                0,
+                pc_reg_local_index,
                 by::BinaryenConst(module, by::BinaryenLiteralInt64((section.addr as i64) + (instr_count * INSTRUCTION_SIZE) as i64)),
             ),
         );
 
+        // Start loop again
         commands.push(
             by::BinaryenBreak(
                 module,
@@ -748,7 +850,7 @@ unsafe fn run() -> Result<(), CompilationError> {
                 by::BinaryenBinary(
                     module,
                     by::BinaryenEqInt64(),
-                    by::BinaryenLocalGet(module, 0, by::BinaryenTypeInt64()),
+                    by::BinaryenLocalGet(module, pc_reg_local_index, by::BinaryenTypeInt64()),
                     by::BinaryenConst(module, by::BinaryenLiteralInt64(range_start_addr as i64)),
                 ),
                 by::BinaryenBlock(
@@ -762,23 +864,38 @@ unsafe fn run() -> Result<(), CompilationError> {
         );
     }
 
-
-    // branches.push(
-    //     by::BinaryenBreak(
-    //         module,
-    //         loop_name.as_ptr(),
-    //         std::ptr::null_mut(),
-    //         std::ptr::null_mut(),
-    //     ),
-    // );
-
-    // let current_pointer_expr = by::BinaryenLocalGet(module, 0, by::BinaryenTypeInt64());
-
     let loop_ = by::BinaryenLoop(module, loop_name.as_ptr(),
         by::BinaryenBlock(module, loop_body_name.as_ptr(),
             branches.as_mut_ptr(), branches.len() as u32, by::BinaryenTypeNone()
         )
     );
+
+    let main_func_body = {
+        let mut items = vec![
+            // Initialize BL register
+            by::BinaryenLocalSet(
+                module,
+                bl_reg_local_index,
+                by::BinaryenConst(module, by::BinaryenLiteralInt64(return_pc_addr as i64)),
+            ),
+
+            // Initialize SP register
+            by::BinaryenLocalSet(
+                module,
+                sp_reg_local_index,
+                by::BinaryenConst(module, by::BinaryenLiteralInt64(stack_addr_end as i64)),
+            ),
+            loop_,
+        ];
+
+        by::BinaryenBlock(
+            module,
+            std::ptr::null_mut(),
+            items.as_mut_ptr(),
+            items.len() as u32,
+            by::BinaryenTypeNone()
+        )
+    };
 
 
     // Create functions
@@ -794,14 +911,14 @@ unsafe fn run() -> Result<(), CompilationError> {
         by::BinaryenTypeNone(),
         var_types.as_mut_ptr(),
         var_types.len() as u32,
-        loop_,
+        main_func_body,
     );
 
 
     let entry_func_body = by::BinaryenCall(
         module,
         main_func_name.as_ptr(),
-        [by::BinaryenConst(module, by::BinaryenLiteralInt64(std::mem::transmute(0x100000 + entry_addr)))].as_mut_ptr(),
+        [by::BinaryenConst(module, by::BinaryenLiteralInt64(std::mem::transmute(entry_addr)))].as_mut_ptr(),
         1,
         by::BinaryenTypeNone(),
     );
