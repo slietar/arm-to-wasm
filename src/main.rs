@@ -7,7 +7,7 @@ use std::ffi::{CStr, CString};
 use std::io::{Cursor, Read, Write};
 use std::fs::File;
 use disarm64::decoder::{self, Operation};
-use mach_object::{LoadCommand, MachCommand, OFile, SectionAttributes};
+use mach_object::{DyLib, LoadCommand, MachCommand, OFile, SectionAttributes};
 
 
 // p. 322
@@ -35,6 +35,38 @@ impl std::fmt::Display for CompilationError {
 }
 
 
+const INSTRUCTION_SIZE: usize = 4;
+
+#[derive(Debug)]
+struct Bind<'a> {
+    address: u64,
+    dylib_index: usize,
+    symbol: &'a str,
+}
+
+#[derive(Debug)]
+struct DependencyDylib<'a> {
+    name: &'a str,
+}
+
+#[derive(Debug)]
+struct Segment<'a> {
+    address: u64,
+    file_offset: usize,
+    executable: bool,
+    name: &'a str,
+}
+
+#[derive(Debug)]
+struct Section<'a> {
+    address: u64,
+    buffer: &'a [u8],
+    name: &'a str,
+    segment_index: usize,
+    size: usize,
+}
+
+
 fn main() {
     unsafe {
         run().unwrap();
@@ -53,14 +85,14 @@ unsafe fn run() -> Result<(), CompilationError> {
     // let mut file = File::open("test/hello").unwrap();
     let mut file = File::open("test/1/main").unwrap();
 
-    let mut buffer = Vec::new();
-    let size = file.read_to_end(&mut buffer).unwrap();
-    let mut cursor = Cursor::new(&buffer[..size]);
+    let mut full_buffer = Vec::new();
+    let size = file.read_to_end(&mut full_buffer).unwrap();
+    let mut cursor = Cursor::new(&full_buffer[..size]);
 
     let ofile = OFile::parse(&mut cursor).unwrap();
 
     let (commands, offset, size) = (match &ofile {
-        OFile::MachFile { header: _, commands } => Some((commands, 0, buffer.len())),
+        OFile::MachFile { header: _, commands } => Some((commands, 0, full_buffer.len())),
         OFile::FatFile { magic: _, files } => {
             let mut result = None;
 
@@ -78,8 +110,55 @@ unsafe fn run() -> Result<(), CompilationError> {
         _ => None,
     }).ok_or(CompilationError("not a Mach-O file".into()))?;
 
-    let buffer = &buffer[offset..(offset + size)];
+    let buffer = &full_buffer[offset..(offset + size)];
 
+
+    // Process segments
+
+    let mut segments = Vec::new();
+    let mut sections = Vec::new();
+
+    for &MachCommand(ref cmd, _cmdsize) in commands {
+        if let LoadCommand::Segment64 { fileoff, maxprot, sections: raw_sections, segname, vmaddr, .. } = cmd {
+            segments.push(Segment {
+                address: *vmaddr as u64,
+                executable: maxprot & 0x1 != 0,
+                file_offset: *fileoff,
+                name: segname,
+            });
+
+            for section in raw_sections {
+                sections.push(Section {
+                    address: section.addr as u64,
+                    buffer: &buffer[(section.offset as usize)..(section.offset as usize + section.size)],
+                    name: &section.sectname,
+                    segment_index: segments.len() - 1,
+                    size: section.size,
+                });
+            }
+        }
+    }
+
+    let text_segment = segments
+        .iter()
+        .find(|seg| seg.name == "__TEXT")
+        .ok_or(CompilationError("no __TEXT segment".into()))?;
+
+
+    // Find dependencies
+
+    let mut dependency_dylibs = Vec::new();
+
+    for command in commands {
+        if let MachCommand(LoadCommand::LoadDyLib(DyLib { name, .. }), _) = command {
+            dependency_dylibs.push(DependencyDylib { name });
+        }
+    }
+
+
+    // Find binds
+
+    let mut binds = Vec::new();
 
     for command in commands {
         // eprintln!("{:?}", command);
@@ -145,9 +224,16 @@ unsafe fn run() -> Result<(), CompilationError> {
                             // eprintln!("{:x?}", bind_value);
                             // eprintln!("{:x?} {:x?}", bind_value, ordinal);
                             // eprintln!("{:x?}", import_value);
-                            eprintln!("0x{:x?} {}", chain, symbol.to_str().unwrap());
+                            // eprintln!("0x{:x?} {}", chain, symbol.to_str().unwrap());
                             // eprintln!("{:?}", lib_ordinal);
                             // eprintln!("---");
+
+                            binds.push(Bind {
+                                // Not sure about `+ text_segment.address`
+                                address: (chain as u64) + text_segment.address,
+                                dylib_index: (lib_ordinal as usize) - 1,
+                                symbol: symbol.to_str().unwrap(),
+                            });
                         }
 
                         if next == 0 {
@@ -165,55 +251,21 @@ unsafe fn run() -> Result<(), CompilationError> {
 
             // eprintln!("{:b?}", bind_value);
             // eprintln!("{}", bind);
-
-
-
-            // let
-            // eprintln!("{:#?}", starts_offset);
-            // eprintln!("{:?}", seg_count);
-            // eprintln!("{:x?}", seg2_info_offset);
-            // eprintln!("{:x?}", seg2_size);
-            // eprintln!("{:x?}", seg2_page_size);
-            // eprintln!("{:x?}", seg2_pointer_format);
-            // eprintln!("{:x?}", seg2_offset);
-            // eprintln!("{:x?}", seg2_page_start);
         }
     }
 
-    // for &MachCommand(ref cmd, _cmdsize) in commands {
-    //     // eprintln!("{:#?}", cmd);
-    //     // continue;
+    // eprintln!("{:#?}", binds);
+    // eprintln!("{:#?}", segments);
+    // eprintln!("{:#?}", sections);
 
-    //     if let LoadCommand::Segment64 { fileoff, sections, .. } = cmd {
-    //         eprintln!("segment: {}", fileoff);
-
-    //         for section in sections {
-    //             eprintln!("  section: {} {}", section.offset, section.reloff);
-    //         }
-    //     }
-    // }
+    for bind in &binds {
+        eprintln!("0x{:x?} {}/{}", bind.address, dependency_dylibs[bind.dylib_index].name, bind.symbol);
+    }
 
     return Ok(());
 
 
-    // Find entry point
-
-    let entry_addr = commands
-        .iter()
-        .find_map(|cmd| {
-            if let MachCommand(LoadCommand::EntryPoint { entryoff, .. }, _) = cmd {
-                Some(*entryoff)
-            } else {
-                None
-            }
-        })
-        // .unwrap_or(0);
-        .ok_or(CompilationError("no entry point".into()))?;
-
-    // eprintln!("{:?}", entry_command);
-
-
-    // Find all symbols
+    // Find symbols
 
     const SYMBOL_TABLE_ENTRY_SIZE: u32 = 16;
 
@@ -241,9 +293,22 @@ unsafe fn run() -> Result<(), CompilationError> {
     // eprintln!("{:?}", symbol_addrs);
 
 
-    // Find block address ranges
+    // Find entry point
 
-    const INSTRUCTION_SIZE: usize = 4;
+    let entry_addr = text_segment.address + commands
+        .iter()
+        .find_map(|cmd| {
+            if let MachCommand(LoadCommand::EntryPoint { entryoff, .. }, _) = cmd {
+                Some(*entryoff)
+            } else {
+                None
+            }
+        })
+        // .unwrap_or(0);
+        .ok_or(CompilationError("no entry point".into()))?;
+
+
+    // Find block address ranges
 
     let mut block_addr_ranges = Vec::new();
     let mut exec_sections = Vec::new();
@@ -253,7 +318,6 @@ unsafe fn run() -> Result<(), CompilationError> {
         addr: u64,
         buffer: &'a [u8],
     }
-
 
     for &MachCommand(ref cmd, _cmdsize) in commands {
         // eprintln!("{:#?}", cmd);
