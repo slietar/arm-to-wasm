@@ -10,7 +10,7 @@ use std::{ffi::CString, fs::File};
 use capstone::prelude::*;
 use elf::{ElfBytes, abi::SHF_EXECINSTR, endian::AnyEndian};
 
-use crate::module::Module;
+use crate::{module::Module, translator::{REGISTER_COUNT, Translator}};
 
 fn extract_instructions(file_data: &[u8]) -> Result<Vec<u8>, String> {
     let file = ElfBytes::<AnyEndian>::minimal_parse(file_data)
@@ -76,14 +76,6 @@ fn extract_instructions(file_data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(instructions)
 }
 
-fn get_arm_operand(operand: &arch::ArchOperand) -> &arch::arm64::Arm64Operand {
-    if let arch::ArchOperand::Arm64Operand(arm_operand) = operand {
-        arm_operand
-    } else {
-        unreachable!()
-    }
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let module = Module::new();
 
@@ -94,47 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Extracted {} instruction bytes", instruction_bytes.len());
 
-    // Setup registers
-
-    fn get_reg_local_index(reg_index: u16) -> u32 {
-        (reg_index as u32) + 1
-    }
-
-    unsafe fn access_reg32(
-        module: *mut by::BinaryenModule,
-        reg_index: u32,
-        use_zero_reg: bool,
-    ) -> by::BinaryenExpressionRef {
-        if use_zero_reg && reg_index == 31 {
-            return unsafe { by::BinaryenConst(module, by::BinaryenLiteralInt32(0)) };
-        }
-
-        unsafe {
-            by::BinaryenUnary(
-                module,
-                by::BinaryenWrapInt64(),
-                by::BinaryenLocalGet(module, get_reg_local_index(reg_index), by::BinaryenInt64()),
-            )
-        }
-    }
-
-    unsafe fn access_reg64(
-        module: *mut by::BinaryenModule,
-        reg_index: u32,
-        use_zero_reg: bool,
-    ) -> by::BinaryenExpressionRef {
-        if use_zero_reg && reg_index == 31 {
-            return unsafe { by::BinaryenConst(module, by::BinaryenLiteralInt64(0)) };
-        }
-
-        unsafe { by::BinaryenLocalGet(module, get_reg_local_index(reg_index), by::BinaryenInt64()) }
-    }
-
-    let return_pc_addr = 0;
-
     // Loop through instructions
-
-    // let mut operations = Vec::new();
 
     let cs = Capstone::new()
         .arm64()
@@ -143,79 +95,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .unwrap();
 
+    let translator = Translator {
+        module: module.by_module,
+    };
+
     let instructions = cs.disasm_all(&instruction_bytes, 0x1000).unwrap();
+    let mut exprs = Vec::new();
 
     for instruction in instructions.as_ref() {
-        // println!();
-        // println!("{}", insn);
-
-        let detail: InsnDetail = cs.insn_detail(&instruction)?;
-        let arch_detail: ArchDetail = detail.arch_detail();
-        let ops = arch_detail.operands();
-
-        let output: &[(&str, String)] = &[
-            ("insn id:", format!("{:?}", instruction.id().0)),
-            ("bytes:", format!("{:?}", instruction.bytes())),
-            // ("read regs:", cs.reg_name(detail.regs_read())),
-            // ("write regs:", reg_names(&cs, detail.regs_write())),
-            // ("insn groups:", group_names(&cs, detail.groups())),
-        ];
-
-        // for &(ref name, ref message) in output.iter() {
-        //     println!("{:4}{:12} {}", "", name, message);
-        // }
-
-        // println!("{:4}operands: {}", "", ops.len());
-
-        // detail.regs_write()
-
-        match instruction.mnemonic().unwrap() {
-            "sub" => {
-                println!("Found a sub instruction!");
-                let op0 = get_arm_operand(&ops[0]);
-                let op1 = get_arm_operand(&ops[1]);
-                let op2 = get_arm_operand(&ops[2]);
-
-                eprintln!("op0: {op0:?}");
-                eprintln!("op1: {op1:?}");
-                eprintln!("op2: {op2:?}");
-
-                let reg0_id = if let arch::arm64::Arm64OperandType::Reg(reg_id) = op0.op_type {
-                    reg_id.0
-                } else {
-                    unreachable!()
-                };
-
-                let reg0 = get_reg_local_index(reg0_id);
-            }
-            _ => {}
-        }
-
-        eprintln!("{:?}", instruction.mnemonic());
-
-        break;
+        let x = translator.translate(&cs, &instruction);
+        exprs.push(x);
     }
+
+    let block = unsafe {
+        by::BinaryenBlock(
+            module.by_module,
+            "block".as_ptr() as *const i8,
+            exprs.as_mut_ptr(),
+            exprs.len() as u32,
+            by::BinaryenTypeNone(),
+        )
+    };
 
     // Run the relooper
 
     let relooper = unsafe { by::RelooperCreate(module.by_module) };
 
-    let block = unsafe {
+    let relooped_block = unsafe {
         by::RelooperAddBlock(
             relooper,
-            by::BinaryenDrop(
-                module.by_module,
-                by::BinaryenBinary(
-                    module.by_module,
-                    by::BinaryenAddInt64(),
-                    by::BinaryenConst(module.by_module, by::BinaryenLiteralInt64(3)),
-                    by::BinaryenConst(module.by_module, by::BinaryenLiteralInt64(4)),
-                ),
-            ),
+            block,
         )
     };
 
-    let expr = unsafe { by::RelooperRenderAndDispose(relooper, block, 0) };
+    let expr = unsafe { by::RelooperRenderAndDispose(relooper, relooped_block, 0) };
+
+    let mut var_types = unsafe { vec![by::BinaryenTypeInt64()] };
+    var_types.extend((0..REGISTER_COUNT).map(|_| unsafe { by::BinaryenTypeInt64() }));
 
     let main_func_name = CString::new("main").unwrap();
 
@@ -225,8 +141,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             main_func_name.as_ptr(),
             by::BinaryenTypeNone(),
             by::BinaryenTypeNone(),
-            [].as_mut_ptr(),
-            0,
+            var_types.as_mut_ptr(),
+            var_types.len() as u32,
             expr,
         )
     };
