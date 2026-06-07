@@ -196,6 +196,7 @@ impl Translator {
         &self,
         cs: &Capstone,
         instruction: &capstone::Insn,
+        address: u64,
     ) -> by::BinaryenExpressionRef {
         let detail: InsnDetail = cs.insn_detail(&instruction).unwrap();
         let arch_detail = detail.arch_detail();
@@ -238,9 +239,42 @@ impl Translator {
                     // )
                 })
             }
-            "adrp" => self.write_register_from_operand(&ops[0], unsafe {
-                by::BinaryenConst(self.module, by::BinaryenLiteralInt64(0xDEADBEEF))
-            }),
+            "adrp" => {
+                let imm = if let arch::arm64::Arm64OperandType::Imm(imm) =
+                    get_arm_operand(&ops[1]).op_type
+                {
+                    imm
+                } else {
+                    unreachable!()
+                };
+
+                self.write_register_from_operand(&ops[0], unsafe {
+                    by::BinaryenConst(
+                        self.module,
+                        by::BinaryenLiteralInt64(u64::cast_signed(
+                            (address & (0xffff_ffff_ffff_f000)) | ((imm as u64) << 12),
+                        )),
+                    )
+                })
+
+                // self.write_register_from_operand(&ops[0], unsafe {
+                // by::BinaryenBinary(
+                //     self.module,
+                //     by::BinaryenAddInt32(),
+                //     by::BinaryenConst(
+                //         self.module,
+                //         by::BinaryenLiteralInt64(u64::cast_signed(
+                //             address & (0xffff_ffff_ffff_f000),
+                //         )),
+                //     ),
+                //     by::BinaryenBinary(
+                //         self.module,
+                //         by::BinaryenShlInt64(),
+                //         self.read_operand(&ops[1], false),
+                //         by::BinaryenConst(self.module, by::BinaryenLiteralInt32(12)),
+                //     ),
+                // )
+            }
             "mov" => {
                 // let op0 = get_arm_operand(&ops[0]);
                 // let op1 = get_arm_operand(&ops[1]);

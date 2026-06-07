@@ -15,6 +15,7 @@ use crate::{
     translator::{Translator, get_arm_operand},
 };
 
+const INSTRUCTION_SIZE: u64 = 4;
 const PAGE_SIZE: u32 = 65_536;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     struct MappedSegment<'a> {
         address: u64,
         data: &'a [u8],
-        offset: u64,
+        memory_offset: u64,
         size: u64,
     }
 
@@ -72,8 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             mapped_segments.push(MappedSegment {
                 address: segment.p_vaddr,
-                data: &file_data[(segment.p_offset as usize)..(segment.p_offset + segment.p_filesz) as usize],
-                offset: current_offset,
+                data: &file_data
+                    [(segment.p_offset as usize)..(segment.p_offset + segment.p_filesz) as usize],
+                memory_offset: current_offset,
                 size: segment.p_filesz,
             });
 
@@ -96,10 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(i, _)| CString::new(format!("segment_{}", i)).unwrap())
         .collect::<Vec<_>>();
 
-    let mut segment_name_ptrs = segment_names
-        .iter()
-        .map(|s| s.as_ptr())
-        .collect::<Vec<_>>();
+    let mut segment_name_ptrs = segment_names.iter().map(|s| s.as_ptr()).collect::<Vec<_>>();
 
     let mut segment_datas = mapped_segments
         .iter()
@@ -113,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|seg| unsafe {
             by::BinaryenConst(
                 module.by_module,
-                by::BinaryenLiteralInt64(seg.offset as i64),
+                by::BinaryenLiteralInt64(seg.memory_offset as i64),
             )
         })
         .collect::<Vec<_>>();
@@ -143,6 +142,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("Total mapped size: {} bytes", total_mapped_size);
 
+    // Find executable segments
+
+    #[derive(Debug)]
+    struct ExecutableSegment {
+        address: u64,
+        source_offset: u64,
+        size: u64,
+    }
+
+    let executable_segments: Vec<_> = file
+        .segments()
+        .unwrap()
+        .iter()
+        .filter(|seg| (seg.p_type == elf::abi::PT_LOAD) && ((seg.p_flags & elf::abi::PF_X) != 0))
+        .map(|seg| ExecutableSegment {
+            address: seg.p_vaddr,
+            source_offset: seg.p_offset,
+            size: seg.p_filesz,
+        })
+        .collect();
+
+    eprintln!("Executable segments: {:#?}", executable_segments);
+
     // Find instructions
 
     let (section_headers_opt, section_name_table_opt) = file
@@ -155,25 +177,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         section_name_table_opt.ok_or_else(|| "ELF has no section name string table".to_string())?;
 
     let mut instruction_bytes = Vec::new();
+    let mut start_address = None;
 
-    for header in section_headers.iter() {
-        let is_executable = (header.sh_flags & SHF_EXECINSTR as u64) != 0;
+    for section in section_headers.iter() {
+        let is_executable = (section.sh_flags & SHF_EXECINSTR as u64) != 0;
+
         if !is_executable {
             continue;
         }
 
+        let matching_executable_segments = executable_segments
+            .iter()
+            .filter(|seg| {
+                let seg_start = seg.address;
+                let seg_end = seg.address + seg.size;
+                let sec_start = section.sh_addr;
+                let sec_end = section.sh_addr + section.sh_size;
+
+                (sec_start >= seg_start && sec_start < seg_end)
+                    || (sec_end > seg_start && sec_end <= seg_end)
+                    || (sec_start <= seg_start && sec_end >= seg_end)
+            })
+            .collect::<Vec<_>>();
+
+        let matching_executable_segment = matching_executable_segments.first().unwrap();
+        // start_address = Some(matching_executable_segment.address + (section.sh_addr - matching_executable_segment.address));
+        start_address = Some(matching_executable_segment.address + section.sh_offset);
+
         let section_name = section_name_table
-            .get(header.sh_name as usize)
+            .get(section.sh_name as usize)
             .unwrap_or("<invalid-section-name>");
 
         let (data, _) = file
-            .section_data(&header)
+            .section_data(&section)
             .map_err(|err| format!("Failed to read section '{section_name}': {err}"))?;
 
         instruction_bytes.extend_from_slice(data);
     }
 
-    println!("Extracted {} instruction bytes", instruction_bytes.len());
+    let start_address = start_address.unwrap();
+
+    eprintln!("Start address: 0x{:x}", start_address);
+    eprintln!("Extracted {} instruction bytes", instruction_bytes.len());
 
     // Loop through instructions
 
@@ -190,6 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let instructions = cs.disasm_all(&instruction_bytes, 0x1000).unwrap();
     let mut exprs = Vec::new();
+
     eprintln!("Found {} instructions", instructions.len());
 
     let mut jump_targets = Vec::new();
@@ -212,9 +258,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     exprs.push(translator.setup());
 
-    for instruction in instructions.as_ref() {
-        let x = translator.translate(&cs, &instruction);
-        exprs.push(x);
+    for (instruction_index, instruction) in instructions.as_ref().iter().enumerate() {
+        let expr = translator.translate(
+            &cs,
+            &instruction,
+            start_address + (instruction_index as u64 * INSTRUCTION_SIZE),
+        );
+
+        exprs.push(expr);
     }
 
     let block = unsafe {
@@ -317,7 +368,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut output_file = File::create("output.wasm")?;
 
-    // module.optimize();
+    module.optimize();
     module.print();
     module.save(&mut output_file)?;
 
