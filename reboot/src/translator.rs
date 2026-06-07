@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
+use std::ops::Index;
 
 use binaryen::ffi as by;
 use capstone::prelude::*;
@@ -30,6 +32,11 @@ fn get_register_id(operand: &arch::ArchOperand) -> u16 {
     } else {
         unreachable!()
     }
+}
+
+fn sign_extend(value: u64, bits: u32) -> u64 {
+    let shift = 64 - bits;
+    ((value << shift) as i64 >> shift) as u64
 }
 
 #[derive(Debug)]
@@ -243,7 +250,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         executable_sections.push(ExecutableSection { address, data });
     }
 
-    eprintln!("Executable sections: {:#?}", executable_sections);
+    // eprintln!("Executable sections: {:#?}", executable_sections);
 
     // Create disassembler
 
@@ -254,33 +261,43 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .unwrap();
 
-    let mut jump_targets = Vec::new();
+    // Find jump addresses
+
+    let mut jump_addresses = Vec::new();
+
+    jump_addresses.push(elf_file.ehdr.e_entry);
 
     for executable_section in &executable_sections {
         let instructions = disassembler
             .disasm_all(&executable_section.data, 0x1000)
             .unwrap();
 
-        eprintln!("Found {} instructions", instructions.len());
+        // eprintln!("Found {} instructions", instructions.len());
 
         for (instruction_index, instruction) in instructions.as_ref().iter().enumerate() {
             let detail: InsnDetail = disassembler.insn_detail(&instruction).unwrap();
             let arch_detail = detail.arch_detail();
             let ops = arch_detail.operands();
 
+            let current_address =
+                executable_section.address + (instruction_index as u64) * INSTRUCTION_SIZE;
+
             if instruction.mnemonic().unwrap() == "bl" {
                 if let capstone::arch::arm64::Arm64OperandType::Imm(imm) =
                     get_arm_operand(&ops[0]).op_type
                 {
-                    jump_targets.push(
-                        executable_section.address + (instruction_index as u64) + (imm as u64),
-                    );
+                    let encoded = u32::from_le_bytes(instruction.bytes().try_into().unwrap());
+                    let imm = encoded & 0x3ff_ffff;
+                    let imm = u64::cast_signed(sign_extend(imm as u64, 26)) << 2;
+                    let target_address = ((current_address as i64) + imm) as u64;
+
+                    jump_addresses.push(target_address);
                 }
             }
         }
     }
 
-    eprintln!("Identified jump targets: {:#x?}", jump_targets);
+    // eprintln!("Identified jump targets: {:#x?}", jump_addresses);
 
     // Create stack memory
 
@@ -300,13 +317,22 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
     // Return
 
+    let jump_map = jump_addresses
+        .iter()
+        .enumerate()
+        .map(|(index, addr)| (*addr, index))
+        .collect::<HashMap<_, _>>();
+
     let relooper = unsafe { by::RelooperCreate(module.by_module) };
     let mut translator = Translator {
         disassembler,
         executable_sections,
+        jumps: Vec::new(),
+        jump_addresses,
+        jump_map,
         module,
-        stack_memory_name,
         relooper,
+        stack_memory_name,
     };
 
     translator.run()?;
@@ -314,10 +340,21 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+    #[derive(Debug)]
+    struct Jump {
+        from: u64,
+        to: u64,
+        condition: Option<by::BinaryenExpressionRef>,
+        code: Vec<by::BinaryenExpressionRef>,
+    }
+
 #[derive(Debug)]
 pub struct Translator<'a> {
     disassembler: Capstone,
     executable_sections: Vec<ExecutableSection<'a>>,
+    jumps: Vec<Jump>,
+    jump_addresses: Vec<u64>,
+    jump_map: HashMap<u64, usize>,
     module: Module,
     relooper: by::RelooperRef,
     stack_memory_name: CString,
@@ -327,6 +364,9 @@ impl Translator<'_> {
     fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut exprs = Vec::new();
 
+        // by::RelooperAddBranch(from, to, condition, code);
+        let mut relooper_blocks = Vec::new();
+
         for executable_section in &self.executable_sections {
             let instructions = self
                 .disassembler
@@ -334,10 +374,33 @@ impl Translator<'_> {
                 .unwrap();
 
             for (instruction_index, instruction) in instructions.as_ref().iter().enumerate() {
-                let expr = self.translate(
-                    &instruction,
-                    executable_section.address + (instruction_index as u64 * INSTRUCTION_SIZE),
-                );
+                let address =
+                    executable_section.address + (instruction_index as u64 * INSTRUCTION_SIZE);
+
+                if self.jump_addresses.contains(&address) {
+                    if !exprs.is_empty() {
+                        let block = unsafe {
+                            by::BinaryenBlock(
+                                self.module.by_module,
+                                "block".as_ptr() as *const i8,
+                                exprs.as_mut_ptr(),
+                                exprs.len() as u32,
+                                by::BinaryenTypeNone(),
+                            )
+                        };
+
+                        let relooper_block = unsafe { by::RelooperAddBlock(self.relooper, block) };
+                        relooper_blocks.push(relooper_block);
+
+                        exprs.clear();
+                    }
+
+                    eprintln!("Translating block starting at 0x{:x}", address);
+                }
+
+                eprintln!("Address: 0x{:x}", address);
+
+                let expr = self.translate_instruction(&instruction, address);
 
                 exprs.push(expr);
             }
@@ -353,11 +416,12 @@ impl Translator<'_> {
             )
         };
 
-        let relooped_block = unsafe { by::RelooperAddBlock(self.relooper, block) };
-        // }
+        let relooper_block = unsafe { by::RelooperAddBlock(self.relooper, block) };
+        relooper_blocks.push(relooper_block);
 
-        // fn finish(&mut self, entry: by::BinaryenExpressionRef) -> Result<(), Box<dyn std::error::Error>> {
-        let expr = unsafe { by::RelooperRenderAndDispose(self.relooper, relooped_block, 0) };
+        // Finalize
+
+        let expr = unsafe { by::RelooperRenderAndDispose(self.relooper, relooper_block, 0) };
 
         let mut var_types = self.var_types();
 
@@ -652,7 +716,7 @@ impl Translator<'_> {
         var_types
     }
 
-    pub fn translate(
+    pub fn translate_instruction(
         &self,
         instruction: &capstone::Insn,
         address: u64,
@@ -750,7 +814,7 @@ impl Translator<'_> {
             }
             "str" => {
                 for op in &ops {
-                    eprintln!("Operand: {:?}", op);
+                    // eprintln!("Operand: {:?}", op);
                 }
 
                 let mem_op = if let arch::arm64::Arm64OperandType::Mem(mem_op) =
