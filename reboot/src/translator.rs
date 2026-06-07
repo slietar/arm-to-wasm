@@ -3,6 +3,8 @@ use std::ffi::CString;
 use binaryen::ffi as by;
 use capstone::prelude::*;
 
+use crate::PAGE_SIZE;
+
 pub const GP_REGISTER_COUNT: u32 = 31;
 
 pub const SP_LOCAL_INDEX: u32 = 0;
@@ -167,12 +169,34 @@ impl Translator {
         }
     }
 
+    // fn resolve_address(
+    //     &self,
+    //     op: arch::arm64::Arm64OpMem,
+    // ) { }
+
     pub fn setup(&self) -> by::BinaryenExpressionRef {
+        let mut steps = unsafe {
+            [
+                by::BinaryenLocalSet(
+                    self.module,
+                    CARRY_FLAG_LOCAL_INDEX,
+                    by::BinaryenConst(self.module, by::BinaryenLiteralInt32(0)),
+                ),
+                by::BinaryenLocalSet(
+                    self.module,
+                    SP_LOCAL_INDEX,
+                    by::BinaryenConst(self.module, by::BinaryenLiteralInt64(PAGE_SIZE as i64)),
+                ),
+            ]
+        };
+
         unsafe {
-            by::BinaryenLocalSet(
+            by::BinaryenBlock(
                 self.module,
-                CARRY_FLAG_LOCAL_INDEX,
-                by::BinaryenConst(self.module, by::BinaryenLiteralInt32(0)),
+                std::ptr::null(),
+                steps.as_mut_ptr(),
+                steps.len() as u32,
+                by::BinaryenTypeNone(),
             )
         }
     }
@@ -288,6 +312,38 @@ impl Translator {
                 let mode_32bit = self.is_half_register(get_register_id(&ops[0]));
 
                 self.write_register_from_operand(&ops[0], self.read_operand(&ops[1], mode_32bit))
+            }
+            "str" => {
+                for op in &ops {
+                    eprintln!("Operand: {:?}", op);
+                }
+
+                let mem_op = if let arch::arm64::Arm64OperandType::Mem(mem_op) =
+                    get_arm_operand(&ops[1]).op_type
+                {
+                    mem_op
+                } else {
+                    unreachable!()
+                };
+
+                if mem_op.base().0 != (arch::arm64::Arm64Reg::ARM64_REG_SP as u16) {
+                    unimplemented!("Only STR with SP as base is supported for now");
+                }
+
+                let memory_name = CString::new("stack").unwrap();
+
+                unsafe {
+                    by::BinaryenStore(
+                        self.module,
+                        8,
+                        mem_op.disp() as u32,
+                        8,
+                        by::BinaryenLocalGet(self.module, SP_LOCAL_INDEX, by::BinaryenInt64()),
+                        self.read_register_from_operand(&ops[0]),
+                        by::BinaryenTypeInt64(),
+                        memory_name.as_ptr(),
+                    )
+                }
             }
             "svc" => {
                 use arch::arm64::Arm64Reg::*;

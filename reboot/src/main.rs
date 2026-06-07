@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // let mut instructions = Vec::new();
 
-    // Initialize memory
+    // Initialize mapped memory
 
     #[derive(Debug)]
     struct MappedSegment<'a> {
@@ -55,6 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         data: &'a [u8],
         memory_offset: u64,
         size: u64,
+        writable: bool,
     }
 
     let mut current_offset = 0;
@@ -77,6 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     [(segment.p_offset as usize)..(segment.p_offset + segment.p_filesz) as usize],
                 memory_offset: current_offset,
                 size: segment.p_filesz,
+                writable: (segment.p_flags & elf::abi::PF_W) != 0,
             });
 
             // eprintln!("{:?}", mapped_segments.last().unwrap().data);
@@ -219,6 +221,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("Start address: 0x{:x}", start_address);
     eprintln!("Extracted {} instruction bytes", instruction_bytes.len());
+
+    // Initialize stack
+
+    let stack_memory_name = CString::new("stack").unwrap();
+    let stack_page_count = 1;
+    let stack_size = stack_page_count * PAGE_SIZE;
+
+    unsafe {
+        // by::BinaryenSetMemory(
+        //     module.by_module,
+        //     stack_page_count,
+        //     i32::cast_unsigned(-1),
+        //     stack_memory_name.as_ptr(),
+        //     std::ptr::null_mut(),
+        //     std::ptr::null_mut(),
+        //     std::ptr::null_mut(),
+        //     std::ptr::null_mut(),
+        //     std::ptr::null_mut(),
+        //     0,
+        //     false,
+        //     true,
+        //     stack_memory_name.as_ptr(),
+        // );
+
+        // by::BinaryenAddMemoryExport(module, internalName, externalName)
+
+        by::BinaryenAddMemoryImport(
+            module.by_module,
+            stack_memory_name.as_ptr(),
+            stack_memory_name.as_ptr(),
+            stack_memory_name.as_ptr(),
+            0u8,
+        );
+    }
 
     // Loop through instructions
 
@@ -368,7 +404,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut output_file = File::create("output.wasm")?;
 
-    module.optimize();
+    // module.optimize();
     module.print();
     module.save(&mut output_file)?;
 

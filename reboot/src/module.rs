@@ -12,8 +12,14 @@ pub struct Module {
 impl Module {
     pub fn new() -> Self {
         let module = unsafe { by::BinaryenModuleCreate() };
+
         unsafe {
-            by::BinaryenModuleSetFeatures(module, by::BinaryenFeatureMemory64());
+            by::BinaryenModuleSetFeatures(
+                module,
+                by::BinaryenModuleGetFeatures(module)
+                    | by::BinaryenFeatureMemory64()
+                    | by::BinaryenFeatureMultiMemory(),
+            );
         }
 
         Self { by_module: module }
