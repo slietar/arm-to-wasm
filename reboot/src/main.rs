@@ -177,6 +177,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     };
 
+    let mut syscall_handler_params = unsafe {
+        [
+            by::BinaryenTypeInt32(),
+            by::BinaryenTypeInt64(),
+            by::BinaryenTypeInt64(),
+            by::BinaryenTypeInt64(),
+            by::BinaryenTypeInt64(),
+            by::BinaryenTypeInt64(),
+            by::BinaryenTypeInt64(),
+            by::BinaryenTypeInt64(),
+        ]
+    };
+
+    let external_module_name = CString::new("env").unwrap();
+    let syscall_handler_name = CString::new("syscall_handler").unwrap();
+
+    let _import = unsafe {
+        by::BinaryenAddFunctionImport(
+            module.by_module,
+            syscall_handler_name.as_ptr(),
+            external_module_name.as_ptr(),
+            syscall_handler_name.as_ptr(),
+            by::BinaryenTypeCreate(
+                syscall_handler_params.as_mut_ptr(),
+                syscall_handler_params.len() as u32,
+            ),
+            by::BinaryenTypeInt64(),
+        )
+    };
+
     let mut output_file = File::create("output.wasm")?;
 
     // module.optimize();

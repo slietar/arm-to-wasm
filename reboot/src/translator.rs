@@ -1,3 +1,5 @@
+use std::ffi::CString;
+
 use binaryen::ffi as by;
 use capstone::prelude::*;
 
@@ -133,14 +135,14 @@ impl Translator {
         unsafe { by::BinaryenLocalSet(self.module, self.get_reg_local_index(register_id), expr) }
     }
 
-    fn get_i64_immediate_from_operand(
+    fn get_immediate_from_operand(
         &self,
         operand: &arch::ArchOperand,
         mode_32bit: bool,
     ) -> by::BinaryenExpressionRef {
         if let arch::arm64::Arm64OperandType::Imm(imm) = get_arm_operand(operand).op_type {
             let value = if mode_32bit {
-                unsafe { by::BinaryenLiteralInt32(std::mem::transmute(imm as u32)) }
+                unsafe { by::BinaryenLiteralInt32(u32::cast_signed(imm as u32)) }
             } else {
                 unsafe { by::BinaryenLiteralInt64(imm) }
             };
@@ -159,7 +161,7 @@ impl Translator {
         match get_arm_operand(operand).op_type {
             arch::arm64::Arm64OperandType::Reg(_) => self.read_register_from_operand(operand),
             arch::arm64::Arm64OperandType::Imm(_) => {
-                self.get_i64_immediate_from_operand(operand, mode_32bit)
+                self.get_immediate_from_operand(operand, mode_32bit)
             }
             _ => unimplemented!(),
         }
@@ -215,7 +217,7 @@ impl Translator {
                         self.module,
                         by::BinaryenAddInt64(),
                         self.read_register_from_operand(&ops[1]),
-                        self.get_i64_immediate_from_operand(&ops[2], mode_32bit),
+                        self.get_immediate_from_operand(&ops[2], mode_32bit),
                     )
 
                     // For ADC
@@ -249,6 +251,39 @@ impl Translator {
 
                 self.write_register_from_operand(&ops[0], self.read_operand(&ops[1], mode_32bit))
             }
+            "svc" => {
+                use arch::arm64::Arm64Reg::*;
+
+                let imm_value = self.get_immediate_from_operand(&ops[0], true);
+                let mut operands = unsafe {
+                    [
+                        imm_value,
+                        self.read_register(ARM64_REG_X8 as u16, false),
+                        self.read_register(ARM64_REG_X0 as u16, false),
+                        self.read_register(ARM64_REG_X1 as u16, false),
+                        self.read_register(ARM64_REG_X2 as u16, false),
+                        self.read_register(ARM64_REG_X3 as u16, false),
+                        self.read_register(ARM64_REG_X4 as u16, false),
+                        self.read_register(ARM64_REG_X5 as u16, false),
+                    ]
+                };
+
+                let func_name = CString::new("syscall_handler").unwrap();
+
+                unsafe {
+                    by::BinaryenLocalSet(
+                        self.module,
+                        FIRST_GP_REGISTER_LOCAL_INDEX,
+                        by::BinaryenCall(
+                            self.module,
+                            func_name.as_ptr(),
+                            operands.as_mut_ptr(),
+                            operands.len() as u32,
+                            by::BinaryenTypeInt64(),
+                        ),
+                    )
+                }
+            }
             "sub" => {
                 // let p = arch_detail.arm64().unwrap();
                 // eprintln!("Is this a SUB with carry? {}", p.update_flags());
@@ -260,7 +295,7 @@ impl Translator {
                         self.module,
                         by::BinaryenSubInt64(),
                         self.read_register_from_operand(&ops[1]),
-                        self.get_i64_immediate_from_operand(&ops[2], mode_32bit),
+                        self.get_immediate_from_operand(&ops[2], mode_32bit),
                     )
                 })
             }
