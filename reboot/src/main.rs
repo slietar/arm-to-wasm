@@ -10,7 +10,7 @@ use std::{ffi::CString, fs::File};
 use capstone::prelude::*;
 use elf::{ElfBytes, abi::SHF_EXECINSTR, endian::AnyEndian};
 
-use crate::{module::Module, translator::{REGISTER_COUNT, Translator}};
+use crate::{module::Module, translator::Translator};
 
 fn extract_instructions(file_data: &[u8]) -> Result<Vec<u8>, String> {
     let file = ElfBytes::<AnyEndian>::minimal_parse(file_data)
@@ -102,6 +102,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let instructions = cs.disasm_all(&instruction_bytes, 0x1000).unwrap();
     let mut exprs = Vec::new();
 
+    exprs.push(translator.setup());
+
     for instruction in instructions.as_ref() {
         let x = translator.translate(&cs, &instruction);
         exprs.push(x);
@@ -121,17 +123,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let relooper = unsafe { by::RelooperCreate(module.by_module) };
 
-    let relooped_block = unsafe {
-        by::RelooperAddBlock(
-            relooper,
-            block,
-        )
-    };
+    let relooped_block = unsafe { by::RelooperAddBlock(relooper, block) };
 
     let expr = unsafe { by::RelooperRenderAndDispose(relooper, relooped_block, 0) };
 
-    let mut var_types = unsafe { vec![by::BinaryenTypeInt64()] };
-    var_types.extend((0..REGISTER_COUNT).map(|_| unsafe { by::BinaryenTypeInt64() }));
+    let mut var_types = translator.var_types();
 
     let main_func_name = CString::new("main").unwrap();
 
