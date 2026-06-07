@@ -3,17 +3,8 @@
 
 mod module;
 mod translator;
-use binaryen::ffi as by;
 
-use std::{ffi::CString, fs::File};
-
-use capstone::prelude::*;
-use elf::{ElfBytes, abi::SHF_EXECINSTR, endian::AnyEndian};
-
-use crate::{
-    module::Module,
-    translator::{Translator, get_arm_operand, translate},
-};
+use crate::{module::Module, translator::translate};
 
 const INSTRUCTION_SIZE: u64 = 4;
 const PAGE_SIZE: u32 = 65_536;

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
-use std::ops::Index;
 
 use binaryen::ffi as by;
 use capstone::prelude::*;
@@ -32,6 +31,13 @@ fn get_register_id(operand: &arch::ArchOperand) -> u16 {
     } else {
         unreachable!()
     }
+}
+
+fn decode_bl_target(instruction: &capstone::Insn, current_address: u64) -> u64 {
+    let encoded = u32::from_le_bytes(instruction.bytes().try_into().unwrap());
+    let imm = encoded & 0x3ff_ffff;
+    let imm = u64::cast_signed(sign_extend(imm as u64, 26)) << 2;
+    ((current_address as i64) + imm) as u64
 }
 
 fn sign_extend(value: u64, bits: u32) -> u64 {
@@ -286,11 +292,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                 if let capstone::arch::arm64::Arm64OperandType::Imm(imm) =
                     get_arm_operand(&ops[0]).op_type
                 {
-                    let encoded = u32::from_le_bytes(instruction.bytes().try_into().unwrap());
-                    let imm = encoded & 0x3ff_ffff;
-                    let imm = u64::cast_signed(sign_extend(imm as u64, 26)) << 2;
-                    let target_address = ((current_address as i64) + imm) as u64;
-
+                    let target_address = decode_bl_target(&instruction, current_address);
                     jump_addresses.push(target_address);
                 }
             }
@@ -317,6 +319,9 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
     // Return
 
+    jump_addresses.sort();
+    jump_addresses.dedup();
+
     let jump_map = jump_addresses
         .iter()
         .enumerate()
@@ -324,9 +329,13 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         .collect::<HashMap<_, _>>();
 
     let relooper = unsafe { by::RelooperCreate(module.by_module) };
-    let mut translator = Translator {
+
+    let reader = Reader {
         disassembler,
         executable_sections,
+    };
+
+    let mut translator = Translator {
         jumps: Vec::new(),
         jump_addresses,
         jump_map,
@@ -335,23 +344,28 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         stack_memory_name,
     };
 
-    translator.run()?;
+    translator.run(&reader)?;
 
     Ok(())
 }
 
-    #[derive(Debug)]
-    struct Jump {
-        from: u64,
-        to: u64,
-        condition: Option<by::BinaryenExpressionRef>,
-        code: Vec<by::BinaryenExpressionRef>,
-    }
+#[derive(Debug)]
+struct Jump {
+    from: RelooperBlockIndex,
+    to: RelooperBlockIndex,
+    condition: Option<by::BinaryenExpressionRef>,
+}
+
+type RelooperBlockIndex = usize;
 
 #[derive(Debug)]
-pub struct Translator<'a> {
+struct Reader<'a> {
     disassembler: Capstone,
     executable_sections: Vec<ExecutableSection<'a>>,
+}
+
+#[derive(Debug)]
+pub struct Translator {
     jumps: Vec<Jump>,
     jump_addresses: Vec<u64>,
     jump_map: HashMap<u64, usize>,
@@ -360,15 +374,15 @@ pub struct Translator<'a> {
     stack_memory_name: CString,
 }
 
-impl Translator<'_> {
-    fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+impl Translator {
+    fn run(&mut self, reader: &Reader) -> Result<(), Box<dyn std::error::Error>> {
         let mut exprs = Vec::new();
 
         // by::RelooperAddBranch(from, to, condition, code);
         let mut relooper_blocks = Vec::new();
 
-        for executable_section in &self.executable_sections {
-            let instructions = self
+        for executable_section in &reader.executable_sections {
+            let instructions = reader
                 .disassembler
                 .disasm_all(&executable_section.data, executable_section.address)
                 .unwrap();
@@ -400,7 +414,8 @@ impl Translator<'_> {
 
                 eprintln!("Address: 0x{:x}", address);
 
-                let expr = self.translate_instruction(&instruction, address);
+                let expr =
+                    self.translate_instruction(instruction, address, relooper_blocks.len(), reader);
 
                 exprs.push(expr);
             }
@@ -418,6 +433,21 @@ impl Translator<'_> {
 
         let relooper_block = unsafe { by::RelooperAddBlock(self.relooper, block) };
         relooper_blocks.push(relooper_block);
+
+        // Add branches
+
+        eprintln!("Jumps: {:#?}", self.jumps);
+
+        for jump in &self.jumps {
+            unsafe {
+                by::RelooperAddBranch(
+                    relooper_blocks[jump.from],
+                    relooper_blocks[jump.to],
+                    jump.condition.unwrap_or(std::ptr::null_mut()),
+                    std::ptr::null_mut(),
+                )
+            };
+        }
 
         // Finalize
 
@@ -505,7 +535,8 @@ impl Translator<'_> {
 
         let mut output_file = File::create("output.wasm")?;
 
-        // self.module.optimize();
+        self.module.optimize();
+        self.module.validate();
         self.module.print();
         self.module.save(&mut output_file)?;
 
@@ -513,7 +544,7 @@ impl Translator<'_> {
     }
 }
 
-impl Translator<'_> {
+impl Translator {
     fn get_reg_local_index(&self, reg_id: u16) -> u32 {
         use arch::arm64::Arm64Reg::*;
 
@@ -716,12 +747,14 @@ impl Translator<'_> {
         var_types
     }
 
-    pub fn translate_instruction(
-        &self,
+    fn translate_instruction(
+        &mut self,
         instruction: &capstone::Insn,
         address: u64,
+        relooper_block_index: usize,
+        reader: &Reader,
     ) -> by::BinaryenExpressionRef {
-        let detail: InsnDetail = self.disassembler.insn_detail(&instruction).unwrap();
+        let detail: InsnDetail = reader.disassembler.insn_detail(&instruction).unwrap();
         let arch_detail = detail.arch_detail();
         let ops = arch_detail.operands();
 
@@ -730,9 +763,17 @@ impl Translator<'_> {
 
         match instruction.mnemonic().unwrap() {
             "bl" => {
-                for op in &ops {
-                    // eprintln!("Operand: {:?}", op);
-                }
+                let target_address = decode_bl_target(instruction, address);
+                let target_index = self
+                    .jump_map
+                    .get(&target_address)
+                    .expect(&format!("Unknown jump target: 0x{:x}", target_address));
+
+                self.jumps.push(Jump {
+                    from: relooper_block_index,
+                    to: *target_index,
+                    condition: None,
+                });
 
                 unsafe { by::BinaryenNop(self.module.by_module) }
             }
