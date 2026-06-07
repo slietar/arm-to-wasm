@@ -1,0 +1,10 @@
+[package]
+name = "reboot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+binaryen = { path = "../../binaryen-rs" }
+capstone = "0.14.0"
+disarm64 = "0.1.26"
+elf = "0.8.0"
