@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-binaryen = "0.13.0"
+binaryen = { path = "../binaryen-rs" }
 disarm64 = "0.1.20"
+elf = "0.8.0"
 mach_object = "0.1.17"

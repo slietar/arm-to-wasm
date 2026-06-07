@@ -6,7 +6,7 @@ unsafe extern "C" {
 
 #[derive(Debug)]
 pub struct Module {
-    by_module: by::BinaryenModuleRef,
+    pub by_module: by::BinaryenModuleRef,
 }
 
 impl Module {
@@ -19,7 +19,7 @@ impl Module {
         Self { by_module: module }
     }
 
-    pub fn optimize(&mut self) {
+    pub fn optimize(&self) {
         unsafe {
             by::BinaryenModuleOptimize(self.by_module);
         }
@@ -27,6 +27,7 @@ impl Module {
 
     pub fn print(&self) {
         unsafe {
+            by::BinaryenModuleValidate(self.by_module);
             by::BinaryenModulePrint(self.by_module);
         }
     }
@@ -37,13 +38,11 @@ impl Module {
         //     by::BinaryenModuleWrite(self.by_module, output.as_mut_ptr() as *mut i8, output.len())
         // };
 
-        let result = unsafe {
-            by::BinaryenModuleAllocateAndWrite(self.by_module, std::ptr::null())
-        };
+        let result =
+            unsafe { by::BinaryenModuleAllocateAndWrite(self.by_module, std::ptr::null()) };
 
-        let buffer = unsafe {
-            std::slice::from_raw_parts(result.binary as *const u8, result.binaryBytes)
-        };
+        let buffer =
+            unsafe { std::slice::from_raw_parts(result.binary as *const u8, result.binaryBytes) };
 
         writer.write_all(buffer)?;
 
