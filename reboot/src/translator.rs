@@ -9,7 +9,7 @@ pub const SP_LOCAL_INDEX: u32 = 0;
 pub const CARRY_FLAG_LOCAL_INDEX: u32 = 1;
 pub const FIRST_GP_REGISTER_LOCAL_INDEX: u32 = 2;
 
-fn get_arm_operand(operand: &arch::ArchOperand) -> &arch::arm64::Arm64Operand {
+pub fn get_arm_operand(operand: &arch::ArchOperand) -> &arch::arm64::Arm64Operand {
     if let arch::ArchOperand::Arm64Operand(arm_operand) = operand {
         arm_operand
     } else {
@@ -198,17 +198,21 @@ impl Translator {
         instruction: &capstone::Insn,
     ) -> by::BinaryenExpressionRef {
         let detail: InsnDetail = cs.insn_detail(&instruction).unwrap();
-        let arch_detail: ArchDetail = detail.arch_detail();
+        let arch_detail = detail.arch_detail();
         let ops = arch_detail.operands();
 
-        eprintln!("Instruction id: {}", instruction.id().0);
-        eprintln!("Instruction mnemonic: {:?}", instruction.mnemonic());
-
-        // for op in &ops {
-        //     eprintln!("Operand: {:?}", op);
-        // }
+        // eprintln!("Instruction id: {}", instruction.id().0);
+        // eprintln!("Instruction mnemonic: {:?}", instruction.mnemonic());
 
         match instruction.mnemonic().unwrap() {
+            "bl" => {
+                for op in &ops {
+                    // eprintln!("Operand: {:?}", op);
+                }
+
+                unsafe { by::BinaryenNop(self.module) }
+            }
+
             "add" => {
                 let mode_32bit = self.is_half_register(get_register_id(&ops[0]));
 
