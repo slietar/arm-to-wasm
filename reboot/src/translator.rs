@@ -40,6 +40,10 @@ fn decode_bl_target(instruction: &capstone::Insn, current_address: u64) -> u64 {
     ((current_address as i64) + imm) as u64
 }
 
+fn bit_mask(bits: u32) -> u64 {
+    (1u64 << bits) - 1
+}
+
 fn sign_extend(value: u64, bits: u32) -> u64 {
     let shift = 64 - bits;
     ((value << shift) as i64 >> shift) as u64
@@ -137,7 +141,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
     // Create mapped memory
 
-    let loaded_memory_name = CString::new("emul_mem").unwrap();
+    let mapped_memory_name = CString::new("mem").unwrap();
 
     let segment_names = mapped_segments
         .iter()
@@ -169,12 +173,17 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         .map(|seg| seg.size as u32)
         .collect::<Vec<_>>();
 
+    let mapped_memory_page_count = total_mapped_size.div_ceil(PAGE_SIZE);
+    let mapped_memory_size = mapped_memory_page_count * PAGE_SIZE;
+    let stack_memory_page_count = 2;
+    let stack_memory_internal_address = mapped_memory_size;
+
     unsafe {
         by::BinaryenSetMemory(
             module.by_module,
-            total_mapped_size.div_ceil(PAGE_SIZE) as u32,
+            (mapped_memory_page_count + stack_memory_page_count) as u32,
             i32::cast_unsigned(-1),
-            loaded_memory_name.as_ptr(),
+            mapped_memory_name.as_ptr(),
             segment_name_ptrs.as_mut_ptr() as *mut *const i8,
             segment_datas.as_mut_ptr() as *mut *const i8,
             segment_passives.as_mut_ptr(),
@@ -183,7 +192,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
             mapped_segments.len() as u32,
             false,
             true,
-            loaded_memory_name.as_ptr(),
+            mapped_memory_name.as_ptr(),
         );
     }
 
@@ -331,22 +340,6 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         .map(|(block_index, (addr, _))| (*addr, block_index))
         .collect::<HashMap<_, _>>();
 
-    // Create stack memory
-
-    let stack_memory_name = CString::new("stack").unwrap();
-    let stack_page_count = 1;
-    let stack_size = stack_page_count * PAGE_SIZE;
-
-    unsafe {
-        by::BinaryenAddMemoryImport(
-            module.by_module,
-            stack_memory_name.as_ptr(),
-            stack_memory_name.as_ptr(),
-            stack_memory_name.as_ptr(),
-            0u8,
-        );
-    }
-
     // Create infrastructure for translation
 
     let relooper = unsafe { by::RelooperCreate(module.by_module) };
@@ -364,7 +357,8 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         jump_map,
         module,
         relooper,
-        stack_memory_name,
+        stack_memory_name: mapped_memory_name.clone(),
+        stack_memory_internal_address,
     };
 
     translator.run(&reader)?;
@@ -397,6 +391,7 @@ pub struct Translator {
     module: Module,
     relooper: by::RelooperRef,
     stack_memory_name: CString,
+    stack_memory_internal_address: u64,
 }
 
 impl Translator {
@@ -474,10 +469,22 @@ impl Translator {
 
         // Finalize
 
+        let entry_block = self.setup();
+        let entry_relooper_block = unsafe { by::RelooperAddBlock(self.relooper, entry_block) };
+
+        unsafe {
+            by::RelooperAddBranch(
+                entry_relooper_block,
+                relooper_blocks[self.jump_map[&self.entry_address]],
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+        }
+
         let expr = unsafe {
             by::RelooperRenderAndDispose(
                 self.relooper,
-                relooper_blocks[self.jump_map[&self.entry_address]],
+                entry_relooper_block,
                 0,
             )
         };
@@ -565,7 +572,7 @@ impl Translator {
         let mut output_file = File::create("output.wasm")?;
 
         self.module.validate();
-        // self.module.optimize();
+        self.module.optimize();
         self.module.print();
         self.module.save(&mut output_file)?;
 
@@ -731,7 +738,7 @@ impl Translator {
     //     op: arch::arm64::Arm64OpMem,
     // ) { }
 
-    pub fn setup(&self) -> by::BinaryenExpressionRef {
+    pub fn setup(&mut self) -> by::BinaryenExpressionRef {
         let mut steps = unsafe {
             [
                 by::BinaryenLocalSet(
@@ -742,10 +749,7 @@ impl Translator {
                 by::BinaryenLocalSet(
                     self.module.by_module,
                     SP_LOCAL_INDEX,
-                    by::BinaryenConst(
-                        self.module.by_module,
-                        by::BinaryenLiteralInt64(PAGE_SIZE as i64),
-                    ),
+                    self.module.const_(0i64),
                 ),
             ]
         };
@@ -833,14 +837,27 @@ impl Translator {
                 })
             }
             "adrp" => {
-                let imm = if let arch::arm64::Arm64OperandType::Imm(imm) =
-                    get_arm_operand(&ops[1]).op_type
-                {
-                    imm
-                } else {
-                    unreachable!()
-                };
+                let imm = 0i64;
 
+                // let imm = if let arch::arm64::Arm64OperandType::Imm(imm) =
+                //     get_arm_operand(&ops[1]).op_type
+                // {
+                //     imm
+                // } else {
+                //     unreachable!()
+                // };
+
+                // for op in &ops {
+                //     eprintln!("Operand: {:?}", op);
+                // }
+
+                // let encoded = u32::from_le_bytes(instruction.bytes().try_into().unwrap());
+                // eprintln!("Binary encoding: {:032b}", encoded);
+                // let imm = (encoded >> 5) & bit_mask(19);
+                // let imm = u64::cast_signed(sign_extend(imm as u64, 26)) << 2;
+                // ((current_address as i64) + imm) as u64
+
+                eprintln!("ADRP {:x} {}", address, imm);
                 self.write_register_from_operand(&ops[0], unsafe {
                     by::BinaryenConst(
                         self.module.by_module,
@@ -899,22 +916,25 @@ impl Translator {
                     unimplemented!("Only STR with SP as base is supported for now");
                 }
 
-                let memory_name = CString::new("stack").unwrap();
-
                 unsafe {
                     by::BinaryenStore(
                         self.module.by_module,
                         8,
-                        mem_op.disp() as u32,
+                        (self.stack_memory_internal_address as u32) + (mem_op.disp() as u32),
                         8,
-                        by::BinaryenLocalGet(
+                        by::BinaryenBinary(
                             self.module.by_module,
-                            SP_LOCAL_INDEX,
-                            by::BinaryenInt64(),
+                            by::BinaryenMulInt64(),
+                            by::BinaryenLocalGet(
+                                self.module.by_module,
+                                SP_LOCAL_INDEX,
+                                by::BinaryenInt64(),
+                            ),
+                            self.module.const_(-1i64),
                         ),
                         self.read_register_from_operand(&ops[0]),
                         by::BinaryenTypeInt64(),
-                        memory_name.as_ptr(),
+                        self.stack_memory_name.as_ptr(),
                     )
                 }
             }
