@@ -269,6 +269,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
     // Find jump addresses
 
+    let mut end_addresses = Vec::new();
     let mut jump_addresses = Vec::new();
 
     jump_addresses.push(elf_file.ehdr.e_entry);
@@ -297,9 +298,38 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+
+        end_addresses.push(executable_section.address + executable_section.data.len() as u64);
     }
 
     // eprintln!("Identified jump targets: {:#x?}", jump_addresses);
+
+    // Compute jump map
+
+    let mut boundary_addresses = jump_addresses
+        .iter()
+        .map(|addr| (*addr, true))
+        .chain(end_addresses.iter().map(|addr| (*addr, false)))
+        .collect::<Vec<_>>();
+
+    boundary_addresses.sort_by_key(|(addr, _)| *addr);
+    boundary_addresses.dedup_by_key(|(addr, _)| *addr); // Not fully ok - if a jump target is also an end address, we will miss the end address.
+
+    let block_address_pairs = boundary_addresses
+        .iter()
+        .zip(boundary_addresses.iter().skip(1))
+        .filter_map(|((addr, is_jump), (next_addr, _))| is_jump.then_some((*addr, *next_addr)))
+        .collect::<Vec<_>>();
+
+    // eprintln!("Identified jump target ranges: {:#x?}", block_address_pairs);
+    // eprintln!("Final jump targets: {:#x?}", jump_addresses);
+    // eprintln!("End addresses: {:#x?}", end_addresses);
+
+    let jump_map = block_address_pairs
+        .iter()
+        .enumerate()
+        .map(|(block_index, (addr, _))| (*addr, block_index))
+        .collect::<HashMap<_, _>>();
 
     // Create stack memory
 
@@ -317,27 +347,20 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Return
-
-    jump_addresses.sort();
-    jump_addresses.dedup();
-
-    let jump_map = jump_addresses
-        .iter()
-        .enumerate()
-        .map(|(index, addr)| (*addr, index))
-        .collect::<HashMap<_, _>>();
+    // Create infrastructure for translation
 
     let relooper = unsafe { by::RelooperCreate(module.by_module) };
 
     let reader = Reader {
+        block_address_pairs,
         disassembler,
-        executable_sections,
+        executable_segments,
+        source_bytes: elf_bytes,
     };
 
     let mut translator = Translator {
+        entry_address: elf_file.ehdr.e_entry,
         jumps: Vec::new(),
-        jump_addresses,
         jump_map,
         module,
         relooper,
@@ -360,14 +383,16 @@ type RelooperBlockIndex = usize;
 
 #[derive(Debug)]
 struct Reader<'a> {
+    block_address_pairs: Vec<(u64, u64)>,
     disassembler: Capstone,
-    executable_sections: Vec<ExecutableSection<'a>>,
+    executable_segments: Vec<ExecutableSegment>,
+    source_bytes: &'a [u8],
 }
 
 #[derive(Debug)]
 pub struct Translator {
+    entry_address: u64,
     jumps: Vec<Jump>,
-    jump_addresses: Vec<u64>,
     jump_map: HashMap<u64, usize>,
     module: Module,
     relooper: by::RelooperRef,
@@ -376,63 +401,61 @@ pub struct Translator {
 
 impl Translator {
     fn run(&mut self, reader: &Reader) -> Result<(), Box<dyn std::error::Error>> {
-        let mut exprs = Vec::new();
-
         // by::RelooperAddBranch(from, to, condition, code);
         let mut relooper_blocks = Vec::new();
 
-        for executable_section in &reader.executable_sections {
+        for (block_index, (block_start_address, block_end_address)) in
+            reader.block_address_pairs.iter().copied().enumerate()
+        {
+            let executable_segment = reader
+                .executable_segments
+                .iter()
+                .find(|seg| {
+                    let seg_start = seg.address;
+                    let seg_end = seg.address + seg.size;
+
+                    (block_start_address >= seg_start && block_start_address < seg_end)
+                        || (block_end_address > seg_start && block_end_address <= seg_end)
+                        || (block_start_address <= seg_start && block_end_address >= seg_end)
+                })
+                .expect(&format!(
+                    "No executable segment found for block starting at 0x{:x}",
+                    block_start_address
+                ));
+
+            let instruction_count = (block_end_address - block_start_address) / INSTRUCTION_SIZE;
+            let instruction_bytes = &reader.source_bytes[(executable_segment.source_offset
+                + (block_start_address - executable_segment.address))
+                as usize..][..(block_end_address - block_start_address) as usize];
+
             let instructions = reader
                 .disassembler
-                .disasm_all(&executable_section.data, executable_section.address)
+                .disasm_all(instruction_bytes, 0x1000)
                 .unwrap();
 
+            let mut exprs = Vec::new();
+
             for (instruction_index, instruction) in instructions.as_ref().iter().enumerate() {
-                let address =
-                    executable_section.address + (instruction_index as u64 * INSTRUCTION_SIZE);
-
-                if self.jump_addresses.contains(&address) {
-                    if !exprs.is_empty() {
-                        let block = unsafe {
-                            by::BinaryenBlock(
-                                self.module.by_module,
-                                "block".as_ptr() as *const i8,
-                                exprs.as_mut_ptr(),
-                                exprs.len() as u32,
-                                by::BinaryenTypeNone(),
-                            )
-                        };
-
-                        let relooper_block = unsafe { by::RelooperAddBlock(self.relooper, block) };
-                        relooper_blocks.push(relooper_block);
-
-                        exprs.clear();
-                    }
-
-                    eprintln!("Translating block starting at 0x{:x}", address);
-                }
-
-                eprintln!("Address: 0x{:x}", address);
+                let address = block_start_address + (instruction_index as u64) * INSTRUCTION_SIZE;
 
                 let expr =
                     self.translate_instruction(instruction, address, relooper_blocks.len(), reader);
-
                 exprs.push(expr);
             }
+
+            let block_expr = unsafe {
+                by::BinaryenBlock(
+                    self.module.by_module,
+                    "block".as_ptr() as *const i8,
+                    exprs.as_mut_ptr(),
+                    exprs.len() as u32,
+                    by::BinaryenTypeNone(),
+                )
+            };
+
+            let relooper_block = unsafe { by::RelooperAddBlock(self.relooper, block_expr) };
+            relooper_blocks.push(relooper_block);
         }
-
-        let block = unsafe {
-            by::BinaryenBlock(
-                self.module.by_module,
-                "block".as_ptr() as *const i8,
-                exprs.as_mut_ptr(),
-                exprs.len() as u32,
-                by::BinaryenTypeNone(),
-            )
-        };
-
-        let relooper_block = unsafe { by::RelooperAddBlock(self.relooper, block) };
-        relooper_blocks.push(relooper_block);
 
         // Add branches
 
@@ -451,7 +474,13 @@ impl Translator {
 
         // Finalize
 
-        let expr = unsafe { by::RelooperRenderAndDispose(self.relooper, relooper_block, 0) };
+        let expr = unsafe {
+            by::RelooperRenderAndDispose(
+                self.relooper,
+                relooper_blocks[self.jump_map[&self.entry_address]],
+                0,
+            )
+        };
 
         let mut var_types = self.var_types();
 
@@ -535,8 +564,8 @@ impl Translator {
 
         let mut output_file = File::create("output.wasm")?;
 
-        self.module.optimize();
         self.module.validate();
+        // self.module.optimize();
         self.module.print();
         self.module.save(&mut output_file)?;
 
