@@ -150,6 +150,55 @@ impl InstructionBytes {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Extend {
+    UXTB,
+    UXTH,
+    UXTW,
+    UXTX,
+    SXTB,
+    SXTH,
+    SXTW,
+    SXTX,
+}
+
+impl Extend {
+    // https://developer.arm.com/documentation/ddi0602/2023-03/Shared-Pseudocode/aarch64-functions-extendreg
+    fn decode(value: u32) -> Self {
+        match value {
+            0b000 => Extend::UXTB,
+            0b001 => Extend::UXTH,
+            0b010 => Extend::UXTW,
+            0b011 => Extend::UXTX,
+            0b100 => Extend::SXTB,
+            0b101 => Extend::SXTH,
+            0b110 => Extend::SXTW,
+            0b111 => Extend::SXTX,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShiftExtend {
+    UXTW,
+    LSL,
+    SXTW,
+    SXTX,
+}
+
+impl ShiftExtend {
+    fn decode(value: u32) -> Self {
+        match value {
+            0b010 => ShiftExtend::UXTW,
+            0b011 => ShiftExtend::LSL,
+            0b110 => ShiftExtend::SXTW,
+            0b111 => ShiftExtend::SXTX,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Shift {
     LSL,
     LSR,
@@ -230,6 +279,14 @@ pub enum Instruction {
     //     value1: Register64,
     //     value2: Register64,
     // },
+    StoreRegisterRegister {
+        base_address: Register,
+        offset: Register,
+        extend: ShiftExtend,
+        extend_amount: u32,
+        value: Register,
+        variant: SizeVariant,
+    },
     SubImmediate {
         destination: Register,
         operand: u64,
@@ -286,14 +343,16 @@ impl Instruction {
             };
         }
 
-        if (value & 0b1011_1111_1100_0000_0000_1100_0000_0000)
-            == 0b1011_1001_0000_0000_0000_1100_0000_0000
+        if (value & 0b1011_1111_1100_0000_0000_0000_0000_0000)
+            == 0b1011_1001_0000_0000_0000_0000_0000_0000
         {
             return Self::StoreRegisterImmediate {
                 address: Address {
                     base: bytes.register(5, false),
                     mode: AddressingMode::PreIndex {
-                        offset: (bytes.immediate_unsigned(10, 12) << (if bytes.bool(31) { 3 } else { 2 })) as i32,
+                        offset: (bytes.immediate_unsigned(10, 12)
+                            << (if bytes.bool(31) { 3 } else { 2 }))
+                            as i32,
                     },
                 },
                 value: bytes.register(0, true),
@@ -339,17 +398,45 @@ impl Instruction {
             };
         }
 
-        if (value & 0b1011_1111_1100_0000_0000_1100_0000_0000)
-            == 0b1011_1001_0100_0000_0000_1100_0000_0000
+        if (value & 0b1011_1111_1100_0000_0000_0000_0000_0000)
+            == 0b1011_1001_0100_0000_0000_0000_0000_0000
         {
             return Self::LoadRegisterImmediate {
                 address: Address {
                     base: bytes.register(5, false),
                     mode: AddressingMode::PreIndex {
-                        offset: (bytes.immediate_unsigned(10, 12) << (if bytes.bool(31) { 3 } else { 2 })) as i32,
+                        offset: (bytes.immediate_unsigned(10, 12)
+                            << (if bytes.bool(31) { 3 } else { 2 }))
+                            as i32,
                     },
                 },
                 destination: bytes.register(0, false),
+                variant: bytes.variant(),
+            };
+        }
+
+        // STR (register)
+        // Store register (register)
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/STR--register---Store-register--register--?lang=en
+        if equal_masked(
+            value,
+            0b1011_1111_1110_0000_0000_1100_0000_0000,
+            0b1011_1000_0010_0000_0000_1000_0000_0000,
+        ) {
+            if !bytes.bool(14) {
+                panic!();
+            }
+
+            return Self::StoreRegisterRegister {
+                base_address: bytes.register(5, false),
+                offset: bytes.register(16, true),
+                extend: ShiftExtend::decode(get_bits(value, 22, 2)),
+                extend_amount: if bytes.bool(11) {
+                    if bytes.bool(31) { 3 } else { 2 }
+                } else {
+                    0
+                },
+                value: bytes.register(0, true),
                 variant: bytes.variant(),
             };
         }
@@ -359,7 +446,7 @@ impl Instruction {
         // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/STRH--register---Store-register-halfword--register--?lang=en
         if equal_masked(
             value,
-                0b1111_1111_1110_0000_0000_1100_0000_0000,
+            0b1111_1111_1110_0000_0000_1100_0000_0000,
             0b0111_1000_0010_0000_0000_1000_0000_0000,
         ) {
             // return Self::StoreRegisterHalfwordImmediate {
@@ -577,8 +664,7 @@ impl Instruction {
         ) {
             return Self::MoveWideWithZero {
                 destination: bytes.register(0, true),
-                value: (get_bits(value, 5, 16) as u64)
-                    << ((get_bits(value, 21, 2) as u64) << 4),
+                value: (get_bits(value, 5, 16) as u64) << ((get_bits(value, 21, 2) as u64) << 4),
                 variant: bytes.variant(),
             };
         }
@@ -594,13 +680,10 @@ impl Instruction {
         ) {
             return Self::FormPCRelativeAddress {
                 destination: bytes.register(0, true),
-                value: sign_extend(
-                    (get_bits(value, 5, 19) << 2) | get_bits(value, 29, 2),
-                    21
-                ) as i64,
+                value: sign_extend((get_bits(value, 5, 19) << 2) | get_bits(value, 29, 2), 21)
+                    as i64,
             };
         }
-
 
         Self::Unknown
     }
@@ -640,8 +723,8 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
                     println!("  [{:#010x}] {:?}", address, instruction);
 
-                    // if let Instruction::Unknown = instruction {
-                    if true {
+                    if let Instruction::Unknown = instruction {
+                        // if true {
                         let disassembled =
                             disassembler.disasm_all(instruction_bytes, address).unwrap();
 
