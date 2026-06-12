@@ -25,7 +25,7 @@ pub fn get_arm_operand(operand: &arch::ArchOperand) -> &arch::arm64::Arm64Operan
     }
 }
 
-fn get_register_id(operand: &arch::ArchOperand) -> u16 {
+pub fn get_register_id(operand: &arch::ArchOperand) -> u16 {
     if let arch::arm64::Arm64OperandType::Reg(reg_id) = get_arm_operand(operand).op_type {
         reg_id.0
     } else {
