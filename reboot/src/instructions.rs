@@ -1,4 +1,9 @@
-use crate::decoding::{decode_bool, equal_masked, get_bits, get_bits_range, sign_extend};
+use capstone::arch::BuildsCapstone as _;
+
+use crate::{
+    INSTRUCTION_SIZE,
+    decoding::{decode_bool, equal_masked, get_bits, get_bits_range, sign_extend},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Register {
@@ -164,7 +169,7 @@ impl Shift {
                 } else {
                     panic!("invalid shift encoding: {value}")
                 }
-            },
+            }
             _ => unreachable!(),
         }
     }
@@ -185,6 +190,11 @@ pub enum Instruction {
     },
     BranchWithLink {
         target: i64,
+    },
+    LoadRegisterImmediate {
+        address: Address,
+        destination: Register,
+        variant: SizeVariant,
     },
     StoreRegisterImmediate {
         address: Address,
@@ -265,6 +275,67 @@ impl Instruction {
                     },
                 },
                 value: Register::decode(get_bits(value, 0, 5), false),
+                variant: if decode_bool(value, 31) {
+                    SizeVariant::Reg64
+                } else {
+                    SizeVariant::Reg32
+                },
+            };
+        }
+
+        // LDR (immediate)
+        // Load register (immediate)
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/LDR--immediate---Load-register--immediate--?lang=en
+        //
+        // Same as STR with bit 22 set to 1
+
+        if equal_masked(
+            value,
+            0b1011_1111_1110_0000_0000_1100_0000_0000,
+            0b1011_1000_0100_0000_0000_0100_0000_0000,
+        ) {
+            return Self::LoadRegisterImmediate {
+                address: Address {
+                    base: bytes.register(5, false),
+                    mode: AddressingMode::PostIndexWithWriteback {
+                        offset: bytes.immediate(12, 9, true),
+                    },
+                },
+                destination: bytes.register(0, false),
+                variant: bytes.variant(),
+            };
+        }
+
+        if (value & 0b1011_1111_1110_0000_0000_1100_0000_0000)
+            == 0b1011_1000_0100_0000_0000_1100_0000_0000
+        {
+            return Self::LoadRegisterImmediate {
+                address: Address {
+                    base: Register::decode(get_bits(value, 5, 5), false),
+                    mode: AddressingMode::PreIndexWithWriteback {
+                        offset: sign_extend(get_bits(value, 12, 9), 9),
+                    },
+                },
+                destination: Register::decode(get_bits(value, 0, 5), false),
+                variant: if decode_bool(value, 31) {
+                    SizeVariant::Reg64
+                } else {
+                    SizeVariant::Reg32
+                },
+            };
+        }
+
+        if (value & 0b1011_1111_1100_0000_0000_1100_0000_0000)
+            == 0b1011_1001_0100_0000_0000_1100_0000_0000
+        {
+            return Self::LoadRegisterImmediate {
+                address: Address {
+                    base: Register::decode(get_bits(value, 5, 5), false),
+                    mode: AddressingMode::PreIndex {
+                        offset: get_bits(value, 10, 12) as i32,
+                    },
+                },
+                destination: Register::decode(get_bits(value, 0, 5), false),
                 variant: if decode_bool(value, 31) {
                     SizeVariant::Reg64
                 } else {
@@ -357,4 +428,58 @@ impl Instruction {
 
         Self::Unknown
     }
+}
+
+pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    // Find executable sections
+    let elf_file = elf::ElfBytes::<elf::endian::AnyEndian>::minimal_parse(&elf_bytes)?;
+    let (section_headers_opt, section_name_table_opt) = elf_file.section_headers_with_strtab()?;
+
+    let disassembler = capstone::Capstone::new()
+        .arm64()
+        .mode(capstone::arch::arm64::ArchMode::Arm)
+        .detail(true)
+        .build()
+        .unwrap();
+
+    if let Some(section_headers) = section_headers_opt {
+        for section_header in section_headers {
+            if (section_header.sh_flags & (elf::abi::SHF_EXECINSTR as u64)) != 0 {
+                let section_name = section_name_table_opt
+                    .as_ref()
+                    .and_then(|strtab| Some(strtab.get(section_header.sh_name as usize)))
+                    .unwrap_or(Ok("<unknown>"))?;
+
+                println!("Section: {}", section_name);
+
+                for instruction_index in 0..(section_header.sh_size / INSTRUCTION_SIZE) {
+                    let offset = section_header.sh_offset + (instruction_index * INSTRUCTION_SIZE);
+                    let instruction_bytes =
+                        &elf_bytes[(offset as usize)..((offset + INSTRUCTION_SIZE) as usize)];
+                    let instruction_value =
+                        u32::from_le_bytes(instruction_bytes.try_into().unwrap());
+                    let instruction = Instruction::decode(instruction_value);
+
+                    let address = section_header.sh_addr + (instruction_index * INSTRUCTION_SIZE);
+
+                    println!("  [{:#010x}] {:?}", address, instruction);
+
+                    if let Instruction::Unknown = instruction {
+                        let disassembled =
+                            disassembler.disasm_all(instruction_bytes, address).unwrap();
+
+                        for capstone_instruction in disassembled.iter() {
+                            println!(
+                                "                 {} {}",
+                                capstone_instruction.mnemonic().unwrap(),
+                                capstone_instruction.op_str().unwrap()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
