@@ -5,6 +5,7 @@
 mod analysis;
 mod module;
 mod translator;
+mod instructions;
 
 use std::path::PathBuf;
 
