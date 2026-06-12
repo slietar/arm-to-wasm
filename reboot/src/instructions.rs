@@ -196,6 +196,10 @@ pub enum Instruction {
         destination: Register,
         variant: SizeVariant,
     },
+    Nop,
+    Return {
+        target: Register,
+    },
     StoreRegisterImmediate {
         address: Address,
         value: Register,
@@ -220,6 +224,9 @@ pub enum Instruction {
         shift_type: Shift,
         operand1: Register,
         variant: SizeVariant,
+    },
+    SupervisorCall {
+        argument: u16,
     },
     Unknown,
 }
@@ -423,6 +430,46 @@ impl Instruction {
         ) {
             return Self::BranchWithLink {
                 target: sign_extend(get_bits(value, 0, 26), 26) as i64,
+            };
+        }
+
+        // RET
+        // Return from subroutine
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/RET--Return-from-subroutine-?lang=en
+
+        if equal_masked(
+            value,
+            0b1111_1111_1111_1111_1111_1100_0001_1111,
+            0b1101_0110_0101_1111_0000_0000_0000_0000,
+        ) {
+            return Self::Return {
+                target: bytes.register(5, true),
+            };
+        }
+
+        // NOP
+        // No operation
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/NOP--No-operation-?lang=en
+
+        if equal_masked(
+            value,
+            0b1111_1111_1111_1111_1111_1111_1111_1111,
+            0b1101_0101_0000_0011_0010_0000_0001_1111,
+        ) {
+            return Self::Nop;
+        }
+
+        // SVC
+        // Supervisor call
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/SVC--Supervisor-call-?lang=en
+
+        if equal_masked(
+            value,
+            0b1111_1111_1110_0000_0000_0000_0001_1111,
+            0b1101_0100_0000_0000_0000_0000_0000_0001,
+        ) {
+            return Self::SupervisorCall {
+                argument: get_bits(value, 5, 16) as u16,
             };
         }
 
