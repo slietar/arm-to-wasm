@@ -1,42 +1,7 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Register32 {
-    W0,
-    W1,
-    W2,
-    W3,
-    W4,
-    W5,
-    W6,
-    W7,
-    W8,
-    W9,
-    W10,
-    W11,
-    W12,
-    W13,
-    W14,
-    W15,
-    W16,
-    W17,
-    W18,
-    W19,
-    W20,
-    W21,
-    W22,
-    W23,
-    W24,
-    W25,
-    W26,
-    W27,
-    W28,
-    W29,
-    W30,
-    WSP,
-    WZR,
-}
+use crate::decoding::{decode_bool, get_bits, get_bits_range, sign_extend};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Register64 {
+enum Register {
     X0,
     X1,
     X2,
@@ -72,9 +37,9 @@ enum Register64 {
     XZR,
 }
 
-impl Register64 {
-    fn decode(value: u64, zero_mode: bool) -> Self {
-        use Register64::*;
+impl Register {
+    fn decode(value: u32, zero_mode: bool) -> Self {
+        use Register::*;
 
         match value {
             0 => X0,
@@ -108,18 +73,29 @@ impl Register64 {
             28 => X28,
             29 => X29,
             30 => X30,
-            31 => if zero_mode { XZR } else { SP },
+            31 => {
+                if zero_mode {
+                    XZR
+                } else {
+                    SP
+                }
+            }
             _ => panic!("invalid register encoding: {value}"),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Register {
-    Reg32(Register32),
-    Reg64(Register64),
+enum SizeVariant {
+    Reg32,
+    Reg64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SizedRegister {
+    register: Register,
+    size: SizeVariant,
+}
 
 #[derive(Debug, Clone)]
 struct Address {
@@ -129,23 +105,17 @@ struct Address {
 
 #[derive(Debug, Clone)]
 enum AddressingMode {
-    PostIndexWithWriteback {
-        offset: i64,
-    },
-    PreIndex {
-        offset: i64,
-    },
-    PreIndexWithWriteback {
-        offset: i64,
-    },
+    PostIndexWithWriteback { offset: i32 },
+    PreIndex { offset: i32 },
+    PreIndexWithWriteback { offset: i32 },
 }
-
 
 #[derive(Debug)]
 enum Instruction {
     StoreRegisterImmediate {
         address: Address,
         value: Register,
+        variant: SizeVariant,
     },
     // StorePairOfRegisters {
     //     address: Register,
@@ -153,14 +123,65 @@ enum Instruction {
     //     value1: Register64,
     //     value2: Register64,
     // },
-    SubImmediate64 {
-        destination: Register64,
-        operand: u64,
-        source: Register64,
+    SubImmediate {
+        destination: Register,
+        operand: i32,
+        source: Register,
+        variant: SizeVariant,
     },
-    SubImmediate32 {
-        destination: Register32,
-        operand: u64,
-        source: Register32,
-    },
+}
+
+// if get_bits_range(value, 22, 30) == 0b010100010 {
+// if (get_bits_range(value, 21, 31) & 0b10111111111) == 0b10111000000 {
+
+impl Instruction {
+    fn decode(value: u32) -> Self {
+        if (value & 0b1011_1111_1110_0000_0000_1100_0000_0000) == 0b1011_1000_0000_0000_0000_0100_0000_0000 {
+            return Self::StoreRegisterImmediate {
+                address: Address {
+                    base: Register::decode(get_bits(value, 5, 5), false),
+                    mode: AddressingMode::PostIndexWithWriteback {
+                        offset: sign_extend(get_bits(value, 12, 9), 9),
+                    },
+                },
+                value: Register::decode(get_bits(value, 0, 5), false),
+                variant: if decode_bool(value, 31) { SizeVariant::Reg64 } else { SizeVariant::Reg32 },
+            };
+        }
+
+        if (value & 0b1011_1111_1110_0000_0000_1100_0000_0000) == 0b1011_1000_0000_0000_0000_1100_0000_0000 {
+            return Self::StoreRegisterImmediate {
+                address: Address {
+                    base: Register::decode(get_bits(value, 5, 5), false),
+                    mode: AddressingMode::PreIndexWithWriteback {
+                        offset: sign_extend(get_bits(value, 12, 9), 9),
+                    },
+                },
+                value: Register::decode(get_bits(value, 0, 5), false),
+                variant: if decode_bool(value, 31) { SizeVariant::Reg64 } else { SizeVariant::Reg32 },
+            };
+        }
+
+        if (value & 0b1011_1111_1100_0000_0000_1100_0000_0000) == 0b1011_1001_0000_0000_0000_1100_0000_0000 {
+            return Self::StoreRegisterImmediate {
+                address: Address {
+                    base: Register::decode(get_bits(value, 5, 5), false),
+                    mode: AddressingMode::PreIndex {
+                        offset: get_bits(value, 10, 12) as i32,
+                    },
+                },
+                value: Register::decode(get_bits(value, 0, 5), false),
+                variant: if decode_bool(value, 31) { SizeVariant::Reg64 } else { SizeVariant::Reg32 },
+            };
+        }
+
+        // if (value & 0b0111_1111_1000_0000_0000_0000_0000_0000) == 0b0101_0001_0000_0000_0000_0000_0000_0000 {
+        //     return Self::SubImmediate {
+
+        //         variant: if decode_bool(value, 31) { SizeVariant::Reg64 } else { SizeVariant::Reg32 },
+        //     };
+        // }
+
+        todo!()
+    }
 }
