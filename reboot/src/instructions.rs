@@ -177,6 +177,12 @@ impl Shift {
 
 #[derive(Debug)]
 pub enum Instruction {
+    AddImmediate {
+        destination: Register,
+        operand: u64,
+        source: Register,
+        variant: SizeVariant,
+    },
     BitwiseOrShiftedRegister {
         destination: Register,
         operand1: Register,
@@ -191,9 +197,18 @@ pub enum Instruction {
     BranchWithLink {
         target: i64,
     },
+    FormPCRelativeAddress {
+        destination: Register,
+        value: i64,
+    },
     LoadRegisterImmediate {
         address: Address,
         destination: Register,
+        variant: SizeVariant,
+    },
+    MoveWideWithZero {
+        destination: Register,
+        value: u64,
         variant: SizeVariant,
     },
     Nop,
@@ -204,6 +219,10 @@ pub enum Instruction {
         address: Address,
         value: Register,
         variant: SizeVariant,
+    },
+    StoreRegisterHalfwordImmediate {
+        address: Address,
+        value: Register,
     },
     // StorePairOfRegisters {
     //     address: Register,
@@ -257,17 +276,13 @@ impl Instruction {
         {
             return Self::StoreRegisterImmediate {
                 address: Address {
-                    base: Register::decode(get_bits(value, 5, 5), false),
+                    base: bytes.register(5, false),
                     mode: AddressingMode::PreIndexWithWriteback {
-                        offset: sign_extend(get_bits(value, 12, 9), 9),
+                        offset: bytes.immediate(12, 9, true),
                     },
                 },
-                value: Register::decode(get_bits(value, 0, 5), false),
-                variant: if decode_bool(value, 31) {
-                    SizeVariant::Reg64
-                } else {
-                    SizeVariant::Reg32
-                },
+                value: bytes.register(0, true),
+                variant: bytes.variant(),
             };
         }
 
@@ -276,17 +291,13 @@ impl Instruction {
         {
             return Self::StoreRegisterImmediate {
                 address: Address {
-                    base: Register::decode(get_bits(value, 5, 5), false),
+                    base: bytes.register(5, false),
                     mode: AddressingMode::PreIndex {
-                        offset: get_bits(value, 10, 12) as i32,
+                        offset: (bytes.immediate_unsigned(10, 12) << (if bytes.bool(31) { 3 } else { 2 })) as i32,
                     },
                 },
-                value: Register::decode(get_bits(value, 0, 5), false),
-                variant: if decode_bool(value, 31) {
-                    SizeVariant::Reg64
-                } else {
-                    SizeVariant::Reg32
-                },
+                value: bytes.register(0, true),
+                variant: bytes.variant(),
             };
         }
 
@@ -318,17 +329,13 @@ impl Instruction {
         {
             return Self::LoadRegisterImmediate {
                 address: Address {
-                    base: Register::decode(get_bits(value, 5, 5), false),
+                    base: bytes.register(5, false),
                     mode: AddressingMode::PreIndexWithWriteback {
-                        offset: sign_extend(get_bits(value, 12, 9), 9),
+                        offset: bytes.immediate(12, 9, true),
                     },
                 },
-                destination: Register::decode(get_bits(value, 0, 5), false),
-                variant: if decode_bool(value, 31) {
-                    SizeVariant::Reg64
-                } else {
-                    SizeVariant::Reg32
-                },
+                destination: bytes.register(0, false),
+                variant: bytes.variant(),
             };
         }
 
@@ -337,17 +344,103 @@ impl Instruction {
         {
             return Self::LoadRegisterImmediate {
                 address: Address {
-                    base: Register::decode(get_bits(value, 5, 5), false),
+                    base: bytes.register(5, false),
                     mode: AddressingMode::PreIndex {
-                        offset: get_bits(value, 10, 12) as i32,
+                        offset: (bytes.immediate_unsigned(10, 12) << (if bytes.bool(31) { 3 } else { 2 })) as i32,
                     },
                 },
-                destination: Register::decode(get_bits(value, 0, 5), false),
-                variant: if decode_bool(value, 31) {
-                    SizeVariant::Reg64
-                } else {
-                    SizeVariant::Reg32
+                destination: bytes.register(0, false),
+                variant: bytes.variant(),
+            };
+        }
+
+        // STRH (register)
+        // Store register halfword (register)
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/STRH--register---Store-register-halfword--register--?lang=en
+        if equal_masked(
+            value,
+                0b1111_1111_1110_0000_0000_1100_0000_0000,
+            0b0111_1000_0010_0000_0000_1000_0000_0000,
+        ) {
+            // return Self::StoreRegisterHalfwordImmediate {
+            //     address: Address {
+            //         base: bytes.register(5, false),
+            //         mode: AddressingMode::PostIndexWithWriteback {
+            //             offset: bytes.immediate(12, 9, true),
+            //         },
+            //     },
+            //     value: bytes.register(0, false),
+            // };
+
+            todo!()
+        }
+
+        // STRH (immediate)
+        // Store register halfword (immediate)
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/STRH--immediate---Store-register-halfword--immediate--?lang=en
+
+        if equal_masked(
+            value,
+            0b1111_1111_1110_0000_0000_1100_0000_0000,
+            0b0111_1000_0000_0000_0000_0100_0000_0000,
+        ) {
+            return Self::StoreRegisterHalfwordImmediate {
+                address: Address {
+                    base: bytes.register(5, false),
+                    mode: AddressingMode::PostIndexWithWriteback {
+                        offset: bytes.immediate(12, 9, true),
+                    },
                 },
+                value: bytes.register(0, true),
+            };
+        }
+
+        if equal_masked(
+            value,
+            0b1111_1111_1110_0000_0000_1100_0000_0000,
+            0b0111_1000_0000_0000_0000_1100_0000_0000,
+        ) {
+            return Self::StoreRegisterHalfwordImmediate {
+                address: Address {
+                    base: bytes.register(5, false),
+                    mode: AddressingMode::PreIndexWithWriteback {
+                        offset: bytes.immediate(12, 9, true),
+                    },
+                },
+                value: bytes.register(0, true),
+            };
+        }
+
+        if equal_masked(
+            value,
+            0b1111_1111_1100_0000_0000_0000_0000_0000,
+            0b0111_1001_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::StoreRegisterHalfwordImmediate {
+                address: Address {
+                    base: bytes.register(5, false),
+                    mode: AddressingMode::PreIndex {
+                        offset: (bytes.immediate_unsigned(10, 12) << 1) as i32,
+                    },
+                },
+                value: bytes.register(0, true),
+            };
+        }
+
+        // ADD (immediate)
+        // Add immediate value
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/ADD--immediate---Add-immediate-value-?lang=en
+        if equal_masked(
+            value,
+            0b0111_1111_1000_0000_0000_0000_0000_0000,
+            0b0001_0001_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::AddImmediate {
+                destination: bytes.register(0, false),
+                operand: (bytes.immediate_unsigned(10, 12) as u64)
+                    << (if bytes.bool(22) { 12 } else { 0 }),
+                source: bytes.register(5, false),
+                variant: bytes.variant(),
             };
         }
 
@@ -473,6 +566,42 @@ impl Instruction {
             };
         }
 
+        // MOVZ
+        // Move wide with zero
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/MOVZ--Move-wide-with-zero-?lang=en
+
+        if equal_masked(
+            value,
+            0b0111_1111_1000_0000_0000_0000_0000_0000,
+            0b0101_0010_1000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::MoveWideWithZero {
+                destination: bytes.register(0, true),
+                value: (get_bits(value, 5, 16) as u64)
+                    << ((get_bits(value, 21, 2) as u64) << 4),
+                variant: bytes.variant(),
+            };
+        }
+
+        // ADR
+        // Form PC-relative address
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/ADR--Form-PC-relative-address-?lang=en
+
+        if equal_masked(
+            value,
+            0b1001_1111_0000_0000_0000_0000_0000_0000,
+            0b0001_0000_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::FormPCRelativeAddress {
+                destination: bytes.register(0, true),
+                value: sign_extend(
+                    (get_bits(value, 5, 19) << 2) | get_bits(value, 29, 2),
+                    21
+                ) as i64,
+            };
+        }
+
+
         Self::Unknown
     }
 }
@@ -511,15 +640,17 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
                     println!("  [{:#010x}] {:?}", address, instruction);
 
-                    if let Instruction::Unknown = instruction {
+                    // if let Instruction::Unknown = instruction {
+                    if true {
                         let disassembled =
                             disassembler.disasm_all(instruction_bytes, address).unwrap();
 
                         for capstone_instruction in disassembled.iter() {
                             println!(
-                                "                 {} {}",
+                                "                 {} {} {:032b}",
                                 capstone_instruction.mnemonic().unwrap(),
-                                capstone_instruction.op_str().unwrap()
+                                capstone_instruction.op_str().unwrap(),
+                                instruction_value,
                             );
                         }
                     }
