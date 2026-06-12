@@ -1,7 +1,7 @@
-use crate::decoding::{decode_bool, get_bits, get_bits_range, sign_extend};
+use crate::decoding::{decode_bool, equal_masked, get_bits, get_bits_range, sign_extend};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Register {
+pub enum Register {
     X0,
     X1,
     X2,
@@ -86,7 +86,7 @@ impl Register {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum SizeVariant {
+pub enum SizeVariant {
     Reg32,
     Reg64,
 }
@@ -98,20 +98,94 @@ struct SizedRegister {
 }
 
 #[derive(Debug, Clone)]
-struct Address {
-    base: Register,
-    mode: AddressingMode,
+pub struct Address {
+    pub base: Register,
+    pub mode: AddressingMode,
 }
 
 #[derive(Debug, Clone)]
-enum AddressingMode {
+pub enum AddressingMode {
     PostIndexWithWriteback { offset: i32 },
     PreIndex { offset: i32 },
     PreIndexWithWriteback { offset: i32 },
 }
 
+struct InstructionBytes(u32);
+
+impl InstructionBytes {
+    fn bool(&self, start: u32) -> bool {
+        decode_bool(self.0, start)
+    }
+
+    fn immediate(&self, start: u32, size: u32, signed: bool) -> i32 {
+        let value = get_bits(self.0, start, size);
+
+        if signed {
+            sign_extend(value, size)
+        } else {
+            value as i32
+        }
+    }
+
+    fn immediate_unsigned(&self, start: u32, size: u32) -> u32 {
+        get_bits(self.0, start, size)
+    }
+
+    fn register(&self, start: u32, zero_mode: bool) -> Register {
+        Register::decode(get_bits(self.0, start, 5), zero_mode)
+    }
+
+    fn variant(&self) -> SizeVariant {
+        if decode_bool(self.0, 31) {
+            SizeVariant::Reg64
+        } else {
+            SizeVariant::Reg32
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Shift {
+    LSL,
+    LSR,
+    ASR,
+    ROR,
+}
+
+impl Shift {
+    fn decode(value: u32, allow_ror: bool) -> Self {
+        match value {
+            0b00 => Shift::LSL,
+            0b01 => Shift::LSR,
+            0b10 => Shift::ASR,
+            0b11 => {
+                if allow_ror {
+                    Shift::ROR
+                } else {
+                    panic!("invalid shift encoding: {value}")
+                }
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[derive(Debug)]
-enum Instruction {
+pub enum Instruction {
+    BitwiseOrShiftedRegister {
+        destination: Register,
+        operand1: Register,
+        operand2: Register,
+        shift_amount: u32,
+        shift_type: Shift,
+        variant: SizeVariant,
+    },
+    Branch {
+        target: i64,
+    },
+    BranchWithLink {
+        target: i64,
+    },
     StoreRegisterImmediate {
         address: Address,
         value: Register,
@@ -125,31 +199,45 @@ enum Instruction {
     // },
     SubImmediate {
         destination: Register,
-        operand: i32,
+        operand: u64,
         source: Register,
         variant: SizeVariant,
     },
+    SubShiftedRegister {
+        destination: Register,
+        operand2: Register,
+        shift_amount: u32,
+        shift_type: Shift,
+        operand1: Register,
+        variant: SizeVariant,
+    },
+    Unknown,
 }
 
-// if get_bits_range(value, 22, 30) == 0b010100010 {
-// if (get_bits_range(value, 21, 31) & 0b10111111111) == 0b10111000000 {
-
 impl Instruction {
-    fn decode(value: u32) -> Self {
-        if (value & 0b1011_1111_1110_0000_0000_1100_0000_0000) == 0b1011_1000_0000_0000_0000_0100_0000_0000 {
+    pub fn decode(value: u32) -> Self {
+        let bytes = InstructionBytes(value);
+
+        // STR (immediate)
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/STR--immediate---Store-register--immediate--
+        if (value & 0b1011_1111_1110_0000_0000_1100_0000_0000)
+            == 0b1011_1000_0000_0000_0000_0100_0000_0000
+        {
             return Self::StoreRegisterImmediate {
                 address: Address {
-                    base: Register::decode(get_bits(value, 5, 5), false),
+                    base: bytes.register(5, false),
                     mode: AddressingMode::PostIndexWithWriteback {
-                        offset: sign_extend(get_bits(value, 12, 9), 9),
+                        offset: bytes.immediate(12, 9, true),
                     },
                 },
-                value: Register::decode(get_bits(value, 0, 5), false),
-                variant: if decode_bool(value, 31) { SizeVariant::Reg64 } else { SizeVariant::Reg32 },
+                value: bytes.register(0, false),
+                variant: bytes.variant(),
             };
         }
 
-        if (value & 0b1011_1111_1110_0000_0000_1100_0000_0000) == 0b1011_1000_0000_0000_0000_1100_0000_0000 {
+        if (value & 0b1011_1111_1110_0000_0000_1100_0000_0000)
+            == 0b1011_1000_0000_0000_0000_1100_0000_0000
+        {
             return Self::StoreRegisterImmediate {
                 address: Address {
                     base: Register::decode(get_bits(value, 5, 5), false),
@@ -158,11 +246,17 @@ impl Instruction {
                     },
                 },
                 value: Register::decode(get_bits(value, 0, 5), false),
-                variant: if decode_bool(value, 31) { SizeVariant::Reg64 } else { SizeVariant::Reg32 },
+                variant: if decode_bool(value, 31) {
+                    SizeVariant::Reg64
+                } else {
+                    SizeVariant::Reg32
+                },
             };
         }
 
-        if (value & 0b1011_1111_1100_0000_0000_1100_0000_0000) == 0b1011_1001_0000_0000_0000_1100_0000_0000 {
+        if (value & 0b1011_1111_1100_0000_0000_1100_0000_0000)
+            == 0b1011_1001_0000_0000_0000_1100_0000_0000
+        {
             return Self::StoreRegisterImmediate {
                 address: Address {
                     base: Register::decode(get_bits(value, 5, 5), false),
@@ -171,17 +265,96 @@ impl Instruction {
                     },
                 },
                 value: Register::decode(get_bits(value, 0, 5), false),
-                variant: if decode_bool(value, 31) { SizeVariant::Reg64 } else { SizeVariant::Reg32 },
+                variant: if decode_bool(value, 31) {
+                    SizeVariant::Reg64
+                } else {
+                    SizeVariant::Reg32
+                },
             };
         }
 
-        // if (value & 0b0111_1111_1000_0000_0000_0000_0000_0000) == 0b0101_0001_0000_0000_0000_0000_0000_0000 {
-        //     return Self::SubImmediate {
+        // SUB (immediate)
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/SUB--immediate---Subtract-immediate-value-
+        if equal_masked(
+            value,
+            0b0111_1111_1000_0000_0000_0000_0000_0000,
+            0b0101_0001_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::SubImmediate {
+                destination: bytes.register(0, false),
+                operand: (bytes.immediate_unsigned(10, 12) as u64)
+                    << (if bytes.bool(22) { 12 } else { 0 }),
+                source: bytes.register(5, false),
+                variant: bytes.variant(),
+            };
+        }
 
-        //         variant: if decode_bool(value, 31) { SizeVariant::Reg64 } else { SizeVariant::Reg32 },
-        //     };
-        // }
+        // SUB (shifted register)
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/SUB--shifted-register---Subtract-optionally-shifted-register-
+        if equal_masked(
+            value,
+            0b0111_1111_0010_0000_0000_0000_0000_0000,
+            0b0100_1011_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::SubShiftedRegister {
+                destination: bytes.register(0, true),
+                operand1: bytes.register(5, true),
+                operand2: bytes.register(16, true),
+                shift_amount: get_bits(value, 10, 6),
+                shift_type: Shift::decode(get_bits(value, 22, 2), false),
+                variant: bytes.variant(),
+            };
+        }
 
-        todo!()
+        // ORR (shifted register)
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/ORR--shifted-register---Bitwise-OR--shifted-register--?lang=en
+        if equal_masked(
+            value,
+            0b0111_1111_0010_0000_0000_0000_0000_0000,
+            0b0010_1010_0000_0000_0000_0000_0000_0000,
+        ) {
+            if !bytes.bool(31) && bytes.bool(15) {
+                panic!();
+            }
+
+            return Self::BitwiseOrShiftedRegister {
+                destination: bytes.register(0, true),
+                operand1: bytes.register(5, true),
+                operand2: bytes.register(16, true),
+                shift_amount: get_bits(value, 10, 6),
+                shift_type: Shift::decode(get_bits(value, 22, 2), false),
+                variant: bytes.variant(),
+            };
+        }
+
+        // B
+        // Branch
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/B--Branch-?lang=en
+
+        if equal_masked(
+            value,
+            0b1111_1100_0000_0000_0000_0000_0000_0000,
+            0b0001_0100_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::Branch {
+                target: sign_extend(get_bits(value, 0, 26), 26) as i64,
+            };
+        }
+
+        // BL
+        // Branch with link
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/BL--Branch-with-link-?lang=en
+
+        if equal_masked(
+            value,
+            0b1111_1100_0000_0000_0000_0000_0000_0000,
+            0b1001_0100_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::BranchWithLink {
+                target: sign_extend(get_bits(value, 0, 26), 26) as i64,
+            };
+        }
+
+        Self::Unknown
     }
 }

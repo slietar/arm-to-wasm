@@ -3,10 +3,10 @@
 #![allow(unused_imports)]
 
 mod analysis;
+mod decoding;
 mod instructions;
 mod module;
 mod translator;
-mod decoding;
 
 use std::path::PathBuf;
 

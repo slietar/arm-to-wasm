@@ -19,3 +19,7 @@ pub fn sign_extend(value: u32, bits: u32) -> i32 {
     let shift = 32 - bits;
     ((value << shift) as i32 >> shift) as i32
 }
+
+pub fn equal_masked(value: u32, mask: u32, expected: u32) -> bool {
+    (value & mask) == expected
+}
