@@ -82,8 +82,8 @@ unsafe fn run() -> Result<(), CompilationError> {
     // let mut file = File::open("test/molcv").unwrap();
     // let mut file = File::open("/opt/homebrew/lib/python3.11/site-packages/numpy/random/_bounded_integers.cpython-311-darwin.so").unwrap();
     // let mut file = File::open("simple-lib/target/debug/simple-lib").unwrap();
-    // let mut file = File::open("test/hello").unwrap();
-    let mut file = File::open("test/1/main").unwrap();
+    let mut file = File::open("test/hello").unwrap();
+    // let mut file = File::open("test/1/main").unwrap();
 
     let mut full_buffer = Vec::new();
     let size = file.read_to_end(&mut full_buffer).unwrap();

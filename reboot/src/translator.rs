@@ -33,18 +33,18 @@ fn get_register_id(operand: &arch::ArchOperand) -> u16 {
     }
 }
 
-fn decode_bl_target(instruction: &capstone::Insn, current_address: u64) -> u64 {
+pub fn decode_bl_target(instruction: &capstone::Insn, current_address: u64) -> u64 {
     let encoded = u32::from_le_bytes(instruction.bytes().try_into().unwrap());
     let imm = encoded & 0x3ff_ffff;
     let imm = u64::cast_signed(sign_extend(imm as u64, 26)) << 2;
     ((current_address as i64) + imm) as u64
 }
 
-fn bit_mask(bits: u32) -> u64 {
+pub fn bit_mask(bits: u32) -> u64 {
     (1u64 << bits) - 1
 }
 
-fn sign_extend(value: u64, bits: u32) -> u64 {
+pub fn sign_extend(value: u64, bits: u32) -> u64 {
     let shift = 64 - bits;
     ((value << shift) as i64 >> shift) as u64
 }
@@ -65,10 +65,10 @@ struct ExecutableSection<'a> {
 }
 
 #[derive(Debug)]
-struct ExecutableSegment {
-    address: u64,
-    source_offset: u64,
-    size: u64,
+pub struct ExecutableSegment {
+    pub address: u64,
+    pub source_offset: u64,
+    pub size: u64,
 }
 
 fn find_mapped_segments<'a>(
@@ -454,6 +454,7 @@ impl Translator {
 
         // Add branches
 
+        eprintln!("Jump map: {:#?}", reader.block_address_pairs);
         eprintln!("Jumps: {:#?}", self.jumps);
 
         for jump in &self.jumps {
@@ -481,13 +482,7 @@ impl Translator {
             );
         }
 
-        let expr = unsafe {
-            by::RelooperRenderAndDispose(
-                self.relooper,
-                entry_relooper_block,
-                0,
-            )
-        };
+        let expr = unsafe { by::RelooperRenderAndDispose(self.relooper, entry_relooper_block, 0) };
 
         let mut var_types = self.var_types();
 
@@ -572,7 +567,7 @@ impl Translator {
         let mut output_file = File::create("output.wasm")?;
 
         self.module.validate();
-        self.module.optimize();
+        // self.module.optimize();
         self.module.print();
         self.module.save(&mut output_file)?;
 

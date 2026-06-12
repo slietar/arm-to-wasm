@@ -1,8 +1,12 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
+#![allow(unused_imports)]
 
+mod analysis;
 mod module;
 mod translator;
+
+use std::path::PathBuf;
 
 use crate::{module::Module, translator::translate};
 
@@ -12,10 +16,13 @@ const PAGE_SIZE: u32 = 65_536;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let module = Module::new();
 
-    let path = std::path::PathBuf::from("../example/target/debug/example");
+    let path = PathBuf::from("../example/target/aarch64-unknown-none/debug/example");
+    // let path = PathBuf::from("/Users/simon/Developer/arm-to-wasm/runtime/target/release/runtime");
     let elf_bytes = std::fs::read(path).expect("Could not read file.");
 
-    let translator = translate(&elf_bytes)?;
+    // let translator = translate(&elf_bytes)?;
+
+    analysis::analyze(&elf_bytes)?;
 
     Ok(())
 }
