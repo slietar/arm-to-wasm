@@ -273,12 +273,12 @@ pub enum Instruction {
         address: Address,
         value: Register,
     },
-    // StorePairOfRegisters {
-    //     address: Register,
-    //     offset: u64,
-    //     value1: Register64,
-    //     value2: Register64,
-    // },
+    StorePairOfRegisters {
+        address: Address,
+        value1: Register,
+        value2: Register,
+        variant: SizeVariant,
+    },
     StoreRegisterRegister {
         base_address: Register,
         offset: Register,
@@ -500,7 +500,7 @@ impl Instruction {
 
         if equal_masked(
             value,
-            0b1111_1111_1100_0000_0000_0000_0000_0000,
+            0b0111_1111_1100_0000_0000_0000_0000_0000,
             0b0111_1001_0000_0000_0000_0000_0000_0000,
         ) {
             return Self::StoreRegisterHalfwordImmediate {
@@ -511,6 +511,66 @@ impl Instruction {
                     },
                 },
                 value: bytes.register(0, true),
+            };
+        }
+
+        // STP
+        // Store pair of registers
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/STP--Store-pair-of-registers-?lang=en
+
+        if equal_masked(
+            value,
+            0b0111_1111_1100_0000_0000_0000_0000_0000,
+            0b0010_1000_1000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::StorePairOfRegisters {
+                address: Address {
+                    base: bytes.register(5, false),
+                    mode: AddressingMode::PostIndexWithWriteback {
+                        offset: bytes.immediate(15, 7, true) * (if bytes.bool(31) { 8 } else { 4 }),
+                    },
+                },
+                value1: bytes.register(0, true),
+                value2: bytes.register(10, true),
+                variant: bytes.variant(),
+            };
+        }
+
+        if equal_masked(
+            value,
+            0b0111_1111_1100_0000_0000_0000_0000_0000,
+            0b0010_1001_1000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::StorePairOfRegisters {
+                address: Address {
+                    base: bytes.register(5, false),
+                    mode: AddressingMode::PreIndexWithWriteback {
+                        offset: bytes.immediate(15, 7, true) * (if bytes.bool(31) { 8 } else { 4 }),
+                    },
+                },
+                value1: bytes.register(0, true),
+                value2: bytes.register(10, true),
+                variant: bytes.variant(),
+            };
+        }
+
+        if equal_masked(
+            value,
+            0b0111_1111_1100_0000_0000_0000_0000_0000,
+            0b0010_1001_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::StorePairOfRegisters {
+                address: Address {
+                    base: bytes.register(5, false),
+                    mode: AddressingMode::PreIndex {
+                        offset: (bytes.immediate_unsigned(10, 12)
+                            << (if bytes.bool(31) { 3 } else { 2 }))
+                            as i32,
+                    },
+                },
+                value1: bytes.register(0, true),
+                value2: bytes.register(10, true),
+                variant: bytes.variant(),
             };
         }
 
