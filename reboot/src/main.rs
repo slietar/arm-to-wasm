@@ -8,6 +8,7 @@ mod decoding;
 mod instructions;
 mod module;
 mod translation;
+mod instruction_helper;
 // mod translator;
 
 use std::path::PathBuf;

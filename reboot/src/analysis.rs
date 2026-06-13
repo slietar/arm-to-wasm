@@ -1,9 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+};
 
 use elf::section;
 
 use crate::{
     INSTRUCTION_SIZE,
+    instruction_helper::InstructionInfo as _,
     instructions::{Address, AddressingMode, Instruction, Register, SizeVariant},
 };
 
@@ -22,10 +26,30 @@ pub struct Analysis {
 }
 
 #[derive(Debug)]
-pub struct ExecutableSegment {
+struct ExecutableSegment {
     pub address: u64,
     pub source_offset: u64,
     pub size: u64,
+}
+
+#[derive(Debug)]
+struct Block {
+    instruction_count: u64,
+    jump: Option<BlockJump>,
+    start_address: u64,
+}
+
+#[derive(Debug)]
+struct BlockJump {
+    conditional: bool,
+    target_address: u64,
+}
+
+#[derive(Debug)]
+struct Jump {
+    conditional: bool,
+    source_address: u64,
+    target_address: u64,
 }
 
 #[derive(Debug)]
@@ -137,18 +161,28 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
 
         let routine_data_offset = segment.source_offset + (routine_address - segment.address);
 
+        let next_routine_address = routines_names
+            .keys()
+            .filter(|&&addr| addr > routine_address)
+            .min()
+            .copied();
+
+        let routine_max_address = next_routine_address
+            .unwrap_or(segment.address + segment.size)
+            .min(segment.address + segment.size);
+
+        // eprintln!("Routine address: {:#x}", routine_address);
+        // eprintln!("Routine max address: {:#x}", routine_max_address);
+
         let mut handled_addresses = HashSet::new();
         let mut queue = vec![routine_address];
-        let mut block_start_addresses = HashSet::new();
-        let mut jump_source_addresses = HashSet::new();
-        block_start_addresses.insert(routine_address);
+        let mut jumps = Vec::new();
 
         let mut stack_entry_size = None;
 
         // Prologue = no branching instruction yet
         let mut is_prologue = true;
 
-        let mut is_block_start = true;
         let mut stack_accesses = Vec::<StackAccess>::new();
 
         while !queue.is_empty() {
@@ -173,22 +207,10 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                     break;
                 }
 
-                // Catches branches to a function that makes no calls or to a function that never returns
-                if (current_address != routine_address)
-                    && let Some(routine_name) = routines_names.get(&current_address)
-                {
-                    eprintln!(
-                        "Stopping at address {:#x} of routine {}",
-                        current_address,
-                        routine_name.as_deref().unwrap(),
-                    );
-
+                // Catches branches [to a function that makes no calls or] to a function that never returns
+                if (current_address < routine_address) || (current_address >= routine_max_address) {
+                    eprintln!("Stopping at address {:#x}", current_address,);
                     break;
-                }
-
-                if is_block_start {
-                    block_start_addresses.insert(current_address);
-                    is_block_start = false;
                 }
 
                 handled_addresses.insert(current_address);
@@ -203,8 +225,11 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                         // eprintln!("Branch target address: {:#x}", target_address);
 
                         queue.push(target_address);
-                        block_start_addresses.insert(target_address);
-                        jump_source_addresses.insert(current_address);
+                        jumps.push(Jump {
+                            conditional: false,
+                            target_address,
+                            source_address: current_address,
+                        });
                         is_prologue = false;
                         break;
                     }
@@ -215,9 +240,11 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                         // eprintln!("Cond Branch target address: {:#x}", target_address);
 
                         queue.push(target_address);
-                        block_start_addresses.insert(target_address);
-                        jump_source_addresses.insert(current_address);
-                        is_block_start = true;
+                        jumps.push(Jump {
+                            conditional: true,
+                            source_address: current_address,
+                            target_address,
+                        });
                         is_prologue = false;
                     }
                     Instruction::TestBitAndBranchIfNonzero {
@@ -237,9 +264,11 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                             as u64;
 
                         queue.push(target_address);
-                        block_start_addresses.insert(target_address);
-                        jump_source_addresses.insert(current_address);
-                        is_block_start = true;
+                        jumps.push(Jump {
+                            conditional: true,
+                            source_address: current_address,
+                            target_address,
+                        });
                         is_prologue = false;
                     }
                     Instruction::BranchWithLink { target } => {
@@ -383,28 +412,59 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
         // eprintln!("Block start addresses: {:#x?}", jump_source_addresses);
         // eprintln!("Jump destination addresses: {:#x?}", block_start_addresses);
 
-        let last_address = *handled_addresses.iter().max().unwrap();
+        // let last_address = *handled_addresses.iter().max().unwrap();
+
+        eprintln!("Jumps: {:#x?}", jumps);
+
+        let block_start_addresses = jumps
+            .iter()
+            .map(|jump| jump.target_address)
+            .chain(std::iter::once(routine_address))
+            .chain(
+                jumps
+                    .iter()
+                    .filter(|jump| jump.conditional)
+                    .map(|jump| jump.source_address + INSTRUCTION_SIZE),
+            )
+            .collect::<HashSet<_>>();
+
+        let mut block_ends = jumps
+            .iter()
+            .flat_map(|jump| [
+                (jump.source_address + INSTRUCTION_SIZE, Some(jump)),
+                (jump.target_address, None),
+            ])
+            .collect::<Vec<_>>();
+
+        block_ends.push((routine_max_address, None));
+
+        block_ends.sort_by_key(|(address, jump)| (*address, jump.is_none()));
+        block_ends.dedup_by_key(|(address, _)| *address);
 
         let mut blocks = block_start_addresses
             .iter()
             .map(|&addr| {
-                let next_addr = jump_source_addresses
+                let (end_addr, end_jump) = block_ends
                     .iter()
-                    .filter(|&&a| a >= addr)
-                    .min()
-                    .copied()
-                    .unwrap_or(last_address)
-                    + INSTRUCTION_SIZE;
+                    .find(|(end_addr, _)| *end_addr > addr)
+                    .unwrap();
 
-                addr..next_addr
+                Block {
+                    start_address: addr,
+                    instruction_count: ((end_addr - addr) / INSTRUCTION_SIZE),
+                    jump: end_jump.map(|jump| BlockJump {
+                        conditional: jump.conditional,
+                        target_address: jump.target_address,
+                    }),
+                }
             })
             .collect::<Vec<_>>();
 
-        blocks.sort_by_key(|range| range.start);
+        blocks.sort_by_key(|block| block.start_address);
 
-        // eprintln!("Blocks: {:#x?}", blocks);
-
-        // eprintln!("Blocks: {:#x?}", blocks);
+        eprintln!("Block start addresses: {:#x?}", block_start_addresses);
+        eprintln!("Block ends: {:#x?}", block_ends);
+        eprintln!("Blocks: {:#x?}", blocks);
 
         // eprintln!("Stack entry size: {:?}", stack_entry_size);
 
@@ -414,6 +474,26 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
 
         // if routine.name.as_deref() == Some("_RNvNtCsbcsGJ9IzBgZ_4core9panicking9panic_fmt") {
         //     eprintln!("Stack accesses: {:#?}", stack_accesses);
+        // }
+
+        let instructions = Instruction::decode_bytes(&segment_data);
+
+        let walker = RegisterReadWalker::default();
+        // let stack = Vec::new();
+
+        // loop {
+        //     let block = &blocks[0];
+
+        //     let block_instructions = &instructions[(((block.start_address - segment.address)
+        //         / INSTRUCTION_SIZE) as usize)
+        //         ..(((block.start_address - segment.address) / INSTRUCTION_SIZE
+        //             + block.instruction_count) as usize)];
+
+        //     for instruction in block_instructions {
+        //         walker.walk(instruction);
+        //     }
+
+        //     // if block.
         // }
 
         let mut variables = HashMap::<i32, SizeVariant>::new();
@@ -462,4 +542,38 @@ pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> 
     // eprintln!("Analysis result: {:#?}", analysis);
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+struct RegisterReadWalker {
+    registers_read: HashSet<Register>,
+    registers_written: HashSet<Register>,
+}
+
+impl RegisterReadWalker {
+    fn merge(&mut self, other: &RegisterReadWalker) {
+        RegisterReadWalker {
+            registers_read: self
+                .registers_read
+                .union(&other.registers_read)
+                .copied()
+                .collect(),
+            registers_written: self
+                .registers_written
+                .intersection(&other.registers_written)
+                .copied()
+                .collect(),
+        };
+    }
+
+    fn walk(&mut self, instruction: &Instruction) {
+        self.registers_read.extend(
+            instruction
+                .registers_read()
+                .iter()
+                .filter(|&&reg| !self.registers_written.contains(&reg)),
+        );
+        self.registers_written
+            .extend(instruction.registers_written());
+    }
 }
