@@ -357,6 +357,18 @@ pub enum Instruction {
     SupervisorCall {
         argument: u16,
     },
+    TestBitAndBranchIfNonzero {
+        bit: u32,
+        target: i64,
+        value: Register,
+        variant: SizeVariant,
+    },
+    TestBitAndBranchIfZero {
+        bit: u32,
+        target: i64,
+        value: Register,
+        variant: SizeVariant,
+    },
     Unknown,
 }
 
@@ -722,6 +734,40 @@ impl Instruction {
             return Self::BranchConditionally {
                 target: bytes.immediate(5, 19, true) as i64,
                 condition: Condition::decode(get_bits(value, 0, 4)),
+            };
+        }
+
+        // TBNZ
+        // Test bit and branch if nonzero
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/TBNZ--Test-bit-and-branch-if-nonzero-
+
+        if equal_masked(
+            value,
+            0b0111_1111_0000_0000_0000_0000_0000_0000,
+            0b0011_0111_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::TestBitAndBranchIfNonzero {
+                bit: get_bits(value, 31, 1) * 32 + get_bits(value, 19, 5),
+                target: bytes.immediate(5, 14, true) as i64,
+                value: bytes.register(0, true),
+                variant: bytes.variant(),
+            };
+        }
+
+        // TBZ
+        // Test bit and branch if zero
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/TBZ--Test-bit-and-branch-if-zero-
+
+        if equal_masked(
+            value,
+            0b0111_1111_0000_0000_0000_0000_0000_0000,
+            0b0011_0110_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::TestBitAndBranchIfZero {
+                bit: get_bits(value, 31, 1) * 32 + get_bits(value, 19, 5),
+                target: bytes.immediate(5, 14, true) as i64,
+                value: bytes.register(0, true),
+                variant: bytes.variant(),
             };
         }
 

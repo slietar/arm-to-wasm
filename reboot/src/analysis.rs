@@ -169,20 +169,32 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                         let target_address = ((current_address as i64)
                             + (*target as i64) * (INSTRUCTION_SIZE as i64))
                             as u64;
-                        eprintln!("Cond Branch target address: {:#x}", target_address);
+                        // eprintln!("Cond Branch target address: {:#x}", target_address);
 
                         queue.push(target_address);
                         jump_addresses.insert(target_address);
                         is_prologue = false;
                     }
-                    // "tbnz" | "tbz" => {
-                    //     let target_address =
-                    //         decode_target_address(&instruction, current_address, 14, 5);
+                    Instruction::TestBitAndBranchIfNonzero {
+                        bit,
+                        target,
+                        value,
+                        variant,
+                    }
+                    | Instruction::TestBitAndBranchIfZero {
+                        bit,
+                        target,
+                        value,
+                        variant,
+                    } => {
+                        let target_address = ((current_address as i64)
+                            + (*target as i64) * (INSTRUCTION_SIZE as i64))
+                            as u64;
 
-                    //     queue.push(target_address);
-                    //     jump_addresses.insert(target_address);
-                    //     is_prologue = false;
-                    // }
+                        queue.push(target_address);
+                        jump_addresses.insert(target_address);
+                        is_prologue = false;
+                    }
                     Instruction::BranchWithLink { target } => {
                         is_prologue = false;
                     }
