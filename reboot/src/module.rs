@@ -64,16 +64,48 @@ impl Module {
 }
 
 impl Module {
-    pub fn i32(&mut self) -> by::BinaryenType {
+    pub fn i32(&self) -> by::BinaryenType {
         unsafe { by::BinaryenInt32() }
     }
 
-    pub fn i64(&mut self) -> by::BinaryenType {
+    pub fn i64(&self) -> by::BinaryenType {
         unsafe { by::BinaryenInt64() }
     }
 
     pub fn const_<T: ToBinaryenLiteral>(&mut self, value: T) -> by::BinaryenExpressionRef {
         unsafe { by::BinaryenConst(self.by_module, value.to_literal()) }
+    }
+
+    pub fn none(&self) -> by::BinaryenType {
+        unsafe { by::BinaryenNone() }
+    }
+
+    pub fn relooper(&mut self) -> Relooper {
+        Relooper {
+            by_relooper: unsafe { by::RelooperCreate(self.by_module) },
+        }
+    }
+}
+
+impl Module {
+    pub fn block(
+        &self,
+        type_: by::BinaryenType,
+        expressions: &[by::BinaryenExpressionRef],
+    ) -> by::BinaryenExpressionRef {
+        unsafe {
+            by::BinaryenBlock(
+                self.by_module,
+                std::ptr::null(),
+                expressions.as_ptr() as *mut by::BinaryenExpressionRef,
+                expressions.len() as u32,
+                type_,
+            )
+        }
+    }
+
+    pub fn nop(&self) -> by::BinaryenExpressionRef {
+        unsafe { by::BinaryenNop(self.by_module) }
     }
 }
 
@@ -123,4 +155,51 @@ impl ToBinaryenLiteral for u64 {
     fn to_literal(&self) -> by::BinaryenLiteral {
         unsafe { by::BinaryenLiteralInt64(u64::cast_signed(*self)) }
     }
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct Expression(by::BinaryenExpressionRef);
+
+#[derive(Debug)]
+pub struct Relooper {
+    by_relooper: by::RelooperRef,
+}
+
+impl Relooper {
+    pub fn add_block(&mut self, code: by::BinaryenExpressionRef) -> RelooperBlock {
+        RelooperBlock {
+            by_block: unsafe { by::RelooperAddBlock(self.by_relooper, code) },
+        }
+    }
+
+    pub fn branch(
+        &self,
+        from: &RelooperBlock,
+        to: &RelooperBlock,
+        condition: Option<by::BinaryenExpressionRef>,
+    ) {
+        let condition_ptr = match condition {
+            Some(cond) => cond,
+            None => std::ptr::null_mut(),
+        };
+
+        unsafe {
+            by::RelooperAddBranch(
+                from.by_block,
+                to.by_block,
+                condition_ptr,
+                std::ptr::null_mut(),
+            )
+        }
+    }
+
+    pub fn finish(self, entry: &RelooperBlock) -> by::BinaryenExpressionRef {
+        unsafe { by::RelooperRenderAndDispose(self.by_relooper, entry.by_block, 0) }
+    }
+}
+
+#[derive(Debug)]
+pub struct RelooperBlock {
+    by_block: by::RelooperBlockRef,
 }
