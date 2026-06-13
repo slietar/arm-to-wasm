@@ -4,7 +4,7 @@ use elf::section;
 
 use crate::{
     INSTRUCTION_SIZE,
-    instructions::{Instruction, Register, SizeVariant},
+    instructions::{Address, AddressingMode, Instruction, Register, SizeVariant},
     translator::{
         ExecutableSegment, bit_mask, decode_bl_target, get_arm_operand, get_register_id,
         sign_extend,
@@ -70,11 +70,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let (section_data, _) = elf_file.section_data(&section)?;
-
-        // eprintln!("Found {} instructions", instructions.len());
-
         let instructions = Instruction::decode_bytes(section_data);
-
         let section_start_address = section.sh_addr;
 
         for (instruction_index, instruction) in instructions.iter().enumerate() {
@@ -125,7 +121,20 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         let mut jump_addresses = HashSet::new();
 
         let mut stack_entry_size = None;
+
+        // Prologue = no branching instruction yet
         let mut is_prologue = true;
+
+        #[derive(Debug)]
+        struct StackAccess {
+            address: u64,
+            offset: i32,
+            size: SizeVariant,
+            read: bool,
+            write: bool,
+        }
+
+        let mut stack_accesses = Vec::<StackAccess>::new();
 
         while !queue.is_empty() {
             let branch_address = queue.pop().unwrap();
@@ -205,12 +214,127 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                         variant: SizeVariant::Reg64,
                     } if stack_entry_size.is_none() && is_prologue => {
                         stack_entry_size = Some(*operand);
-                        eprintln!("Stack entry size: {}", stack_entry_size.unwrap());
+                    }
+                    Instruction::StorePairOfRegisters {
+                        address:
+                            Address {
+                                base: Register::SP,
+                                mode:
+                                    AddressingMode::PostIndexWithWriteback { offset }
+                                    | AddressingMode::PreIndexWithWriteback { offset },
+                            },
+                        value1,
+                        value2,
+                        variant,
+                    } if stack_entry_size.is_none() && is_prologue => {
+                        assert!(*offset <= 0);
+                        stack_entry_size = Some(-*offset as u64);
+
+                        stack_accesses.push(StackAccess {
+                            address: current_address,
+                            offset: 0,
+                            size: *variant,
+                            read: false,
+                            write: true,
+                        });
+
+                        stack_accesses.push(StackAccess {
+                            address: current_address,
+                            offset: if *variant == SizeVariant::Reg64 { 8 } else { 4 },
+                            size: *variant,
+                            read: false,
+                            write: true,
+                        });
+                    }
+                    Instruction::StoreRegisterImmediate {
+                        address:
+                            Address {
+                                base: Register::SP,
+                                mode:
+                                    AddressingMode::PostIndexWithWriteback { offset }
+                                    | AddressingMode::PreIndexWithWriteback { offset },
+                            },
+                        value,
+                        variant,
+                    } if stack_entry_size.is_none() && is_prologue => {
+                        assert!(*offset <= 0);
+                        stack_entry_size = Some(-*offset as u64);
+
+                        stack_accesses.push(StackAccess {
+                            address: current_address,
+                            offset: 0,
+                            size: *variant,
+                            read: false,
+                            write: true,
+                        });
                     }
                     Instruction::Return { target } => {
                         is_prologue = false;
                         break;
                     }
+
+                    Instruction::LoadRegisterImmediate {
+                        address:
+                            Address {
+                                base: Register::SP,
+                                mode,
+                            },
+                        destination,
+                        variant,
+                    } => {
+                        stack_accesses.push(StackAccess {
+                            address: current_address,
+                            offset: mode.access_offset(),
+                            size: *variant,
+                            read: true,
+                            write: false,
+                        });
+                    }
+                    Instruction::StoreRegisterImmediate {
+                        address:
+                            Address {
+                                base: Register::SP,
+                                mode,
+                            },
+                        value,
+                        variant,
+                    } => {
+                        stack_accesses.push(StackAccess {
+                            address: current_address,
+                            offset: mode.access_offset(),
+                            size: *variant,
+                            read: false,
+                            write: true,
+                        });
+                    }
+                    Instruction::StorePairOfRegisters {
+                        address:
+                            Address {
+                                base: Register::SP,
+                                mode,
+                            },
+                        value1,
+                        value2,
+                        variant,
+                    } => {
+                        stack_accesses.push(StackAccess {
+                            address: current_address,
+                            offset: mode.access_offset(),
+                            size: *variant,
+                            read: false,
+                            write: true,
+                        });
+
+                        stack_accesses.push(StackAccess {
+                            address: current_address,
+                            offset: mode.access_offset()
+                                + (if *variant == SizeVariant::Reg64 { 8 } else { 4 }),
+                            size: *variant,
+                            read: false,
+                            write: true,
+                        });
+                    }
+
                     _ => {
                         // eprintln!("Skipping instruction: {} {}", instruction.mnemonic().unwrap(), instruction.op_str().unwrap());
                     }
@@ -218,7 +342,34 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        eprintln!("Jump addresses: {:#x?}", jump_addresses);
+        eprintln!("Stack entry size: {:?}", stack_entry_size);
+        // eprintln!("Jump addresses: {:#x?}", jump_addresses);
+        // eprintln!("Stack accesses: {:#?}", stack_accesses);
+
+        // if routine.name.as_deref() == Some("_RNvNtCsbcsGJ9IzBgZ_4core9panicking9panic_fmt") {
+        //     eprintln!("Stack accesses: {:#?}", stack_accesses);
+        // }
+
+        let mut variables = HashMap::<i32, SizeVariant>::new();
+
+        for stack_access in stack_accesses {
+            let offset = stack_access.offset;
+
+            if let Some(existing_size) = variables.get_mut(&offset) {
+                if stack_access.size == SizeVariant::Reg64 {
+                    *existing_size = SizeVariant::Reg64;
+                }
+            } else {
+                variables.insert(offset, stack_access.size);
+            }
+        }
+
+        let mut variables = variables.into_iter().collect::<Vec<_>>();
+        variables.sort_by_key(|(offset, size)| *offset);
+
+        for (offset, size) in variables {
+            eprintln!("Variable at SP{:+#}: {:?}", offset, size);
+        }
     }
 
     // eprintln!("Found {} unique function addresses", routines.len());

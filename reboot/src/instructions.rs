@@ -99,12 +99,6 @@ pub enum SizeVariant {
     Reg64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct SizedRegister {
-    register: Register,
-    size: SizeVariant,
-}
-
 #[derive(Debug, Clone)]
 pub struct Address {
     pub base: Register,
@@ -116,6 +110,16 @@ pub enum AddressingMode {
     PostIndexWithWriteback { offset: i32 },
     PreIndex { offset: i32 },
     PreIndexWithWriteback { offset: i32 },
+}
+
+impl AddressingMode {
+    pub fn access_offset(&self) -> i32 {
+        match self {
+            AddressingMode::PostIndexWithWriteback { offset } => 0,
+            AddressingMode::PreIndex { offset } => *offset,
+            AddressingMode::PreIndexWithWriteback { offset } => *offset,
+        }
+    }
 }
 
 struct InstructionBytes(u32);
@@ -628,9 +632,7 @@ impl Instruction {
                 address: Address {
                     base: bytes.register(5, false),
                     mode: AddressingMode::PreIndex {
-                        offset: (bytes.immediate_unsigned(10, 12)
-                            << (if bytes.bool(31) { 3 } else { 2 }))
-                            as i32,
+                        offset: bytes.immediate(15, 7, true) * (if bytes.bool(31) { 8 } else { 4 }),
                     },
                 },
                 value1: bytes.register(0, true),
