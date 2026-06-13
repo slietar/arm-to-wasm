@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use capstone::arch::BuildsCapstone as _;
+use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 
 use crate::{
     INSTRUCTION_SIZE,
@@ -777,17 +778,42 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("Section: {}", section_name);
 
-                for instruction_index in 0..(section_header.sh_size / INSTRUCTION_SIZE) {
+                let instant = Instant::now();
+
+                let instructions = (0..(section_header.sh_size / INSTRUCTION_SIZE)).into_par_iter().map(|instruction_index| {
                     let offset = section_header.sh_offset + (instruction_index * INSTRUCTION_SIZE);
+                    let instruction_bytes =
+                        &elf_bytes[(offset as usize)..((offset + INSTRUCTION_SIZE) as usize)];
+                    let instruction_value =
+                        u32::from_le_bytes(instruction_bytes.try_into().unwrap());
+
+                    Instruction::decode(instruction_value)
+                });
+
+                let unknown_count = instructions.clone().filter(|instruction| matches!(instruction, Instruction::Unknown)).count();
+
+                let duration = instant.elapsed();
+
+                eprintln!(
+                    "Decoded {} instructions in {:?} ({:.2} M instructions/sec)",
+                    section_header.sh_size / INSTRUCTION_SIZE,
+                    duration,
+                    (section_header.sh_size / INSTRUCTION_SIZE) as f64 / duration.as_secs_f64() / 1e6
+                );
+
+                // unknown_counts.insert("foo".to_string(), unknown_count);
+
+                for (instruction_index, instruction) in instructions.collect::<Vec<_>>().into_iter().enumerate() {
+                    let offset = section_header.sh_offset + ((instruction_index as u64) * INSTRUCTION_SIZE);
                     let instruction_bytes =
                         &elf_bytes[(offset as usize)..((offset + INSTRUCTION_SIZE) as usize)];
                     let instruction_value =
                         u32::from_le_bytes(instruction_bytes.try_into().unwrap());
                     let instruction = Instruction::decode(instruction_value);
 
-                    let address = section_header.sh_addr + (instruction_index * INSTRUCTION_SIZE);
+                    let address = section_header.sh_addr + ((instruction_index as u64) * INSTRUCTION_SIZE);
 
-                    // println!("  [{:#010x}] {:?}", address, instruction);
+                    println!("  [{:#010x}] {:?}", address, instruction);
 
                     if let Instruction::Unknown = instruction {
                         // if true {
@@ -802,12 +828,12 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                                 .and_modify(|count| *count += 1)
                                 .or_insert(1);
 
-                            // println!(
-                            //     "                 {} {} {:032b}",
-                            //     mnemonic,
-                            //     capstone_instruction.op_str().unwrap(),
-                            //     instruction_value,
-                            // );
+                            println!(
+                                "                 {} {} {:032b}",
+                                mnemonic,
+                                capstone_instruction.op_str().unwrap(),
+                                instruction_value,
+                            );
                         }
                     }
                 }

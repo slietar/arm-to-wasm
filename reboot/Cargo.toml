@@ -8,3 +8,4 @@ binaryen = { path = "../../binaryen-rs" }
 capstone = "0.14.0"
 disarm64 = "0.1.26"
 elf = "0.8.0"
+rayon = "1.12.0"
