@@ -1,56 +1,17 @@
 use std::collections::{HashMap, HashSet};
 
-use capstone::{arch::arm64::Arm64Reg, prelude::*};
 use elf::section;
 
 use crate::{
-    instructions::Instruction,
+    INSTRUCTION_SIZE,
+    instructions::{Instruction, Register, SizeVariant},
     translator::{
         ExecutableSegment, bit_mask, decode_bl_target, get_arm_operand, get_register_id,
         sign_extend,
     },
 };
 
-const INSTRUCTION_SIZE: u64 = 4;
-
-pub fn decode_target_address(
-    instruction: &capstone::Insn,
-    current_address: u64,
-    length: u32,
-    shift: u32,
-) -> u64 {
-    let encoded = u32::from_le_bytes(instruction.bytes().try_into().unwrap());
-    let imm = ((encoded >> shift) as u64) & bit_mask(length);
-    let imm = u64::cast_signed(sign_extend(imm as u64, length)) << 2;
-    ((current_address as i64) + imm) as u64
-}
-
-pub fn get_register_id_from_arm_operand(
-    operand: &arch::arm64::Arm64Operand,
-) -> Option<Arm64Reg::Type> {
-    if let arch::arm64::Arm64OperandType::Reg(reg_id) = operand.op_type {
-        Some(reg_id.0 as Arm64Reg::Type)
-    } else {
-        None
-    }
-}
-
-pub fn get_immediate_from_arm_operand(operand: &arch::arm64::Arm64Operand) -> Option<u64> {
-    if let arch::arm64::Arm64OperandType::Imm(imm) = operand.op_type {
-        Some(i64::cast_unsigned(imm))
-    } else {
-        None
-    }
-}
-
 pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-    let disassembler = Capstone::new()
-        .arm64()
-        .mode(capstone::arch::arm64::ArchMode::Arm)
-        .detail(true)
-        .build()
-        .unwrap();
-
     let elf_file = elf::ElfBytes::<elf::endian::AnyEndian>::minimal_parse(&elf_bytes)?;
     let (section_headers_opt, section_name_table_opt) = elf_file.section_headers_with_strtab()?;
     let section_headers = section_headers_opt
@@ -108,36 +69,23 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        let (data, _) = elf_file.section_data(&section)?;
-
-        let instructions = disassembler.disasm_all(data, 0x1000).unwrap();
+        let (section_data, _) = elf_file.section_data(&section)?;
 
         // eprintln!("Found {} instructions", instructions.len());
 
+        let instructions = Instruction::decode_bytes(section_data);
+
         let section_start_address = section.sh_addr;
 
-        for (instruction_index, instruction) in instructions.as_ref().iter().enumerate() {
-            let instruction_data = instruction.bytes();
-            let instruction_value = u32::from_le_bytes(instruction_data.try_into().unwrap());
-            let i = Instruction::decode(instruction_value);
-            eprintln!("Instruction: {:#?}", i);
+        for (instruction_index, instruction) in instructions.iter().enumerate() {
+            if let Instruction::BranchWithLink { target } = instruction {
+                let target_address = ((section_start_address as i64)
+                    + ((instruction_index as i64) + (*target as i64)) * (INSTRUCTION_SIZE as i64))
+                    as u64;
 
-            let detail: InsnDetail = disassembler.insn_detail(&instruction).unwrap();
-            let arch_detail = detail.arch_detail();
-            let mut ops = arch_detail.arm64().unwrap().operands();
-
-            let current_address =
-                section_start_address + (instruction_index as u64) * INSTRUCTION_SIZE;
-
-            if instruction.mnemonic().unwrap() == "bl" {
-                if let capstone::arch::arm64::Arm64OperandType::Imm(imm) =
-                    ops.next().unwrap().op_type
-                {
-                    let target_address = decode_bl_target(&instruction, current_address);
-                    routines
-                        .entry(target_address)
-                        .or_insert_with(|| Routine { name: None });
-                }
+                routines
+                    .entry(target_address)
+                    .or_insert_with(|| Routine { name: None });
             }
         }
     }
@@ -189,12 +137,9 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
             // eprintln!("Handling address {:#x}", current_address);
 
             // let instruction_index = (current_address - segment.address) / INSTRUCTION_SIZE;
-            let instructions = disassembler
-                .disasm_all(
-                    &segment_data[((branch_address - segment.address) as usize)..],
-                    0x1000,
-                )
-                .unwrap();
+            let instructions = Instruction::decode_bytes(
+                &segment_data[((branch_address - segment.address) as usize)..],
+            );
 
             for (instruction_index, instruction) in instructions.iter().enumerate() {
                 let current_address =
@@ -208,14 +153,11 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
                 // eprintln!("Handling address {:#x}", current_address);
 
-                let detail: InsnDetail = disassembler.insn_detail(&instruction).unwrap();
-                let arch_detail = detail.arch_detail();
-                // let mut ops = arch_detail.arm64().unwrap().operands();
-
-                match instruction.mnemonic().unwrap() {
-                    "b" => {
-                        let target_address =
-                            decode_target_address(&instruction, current_address, 26, 0);
+                match instruction {
+                    Instruction::Branch { target } => {
+                        let target_address = ((current_address as i64)
+                            + (*target as i64) * (INSTRUCTION_SIZE as i64))
+                            as u64;
                         // eprintln!("Branch target address: {:#x}", target_address);
 
                         queue.push(target_address);
@@ -223,38 +165,35 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                         is_prologue = false;
                         break;
                     }
-                    "b.lt" => {
-                        let target_address =
-                            decode_target_address(&instruction, current_address, 19, 5);
-                        // eprintln!("Cond Branch target address: {:#x}", target_address);
+                    // Instruction::ConditionalBranch { target } => {
+                    //     let target_address =
+                    //         decode_target_address(&instruction, current_address, 19, 5);
+                    //     // eprintln!("Cond Branch target address: {:#x}", target_address);
 
-                        queue.push(target_address);
-                        jump_addresses.insert(target_address);
-                        is_prologue = false;
-                    }
-                    "tbnz" | "tbz" => {
-                        let target_address =
-                            decode_target_address(&instruction, current_address, 14, 5);
+                    //     queue.push(target_address);
+                    //     jump_addresses.insert(target_address);
+                    //     is_prologue = false;
+                    // }
+                    // "tbnz" | "tbz" => {
+                    //     let target_address =
+                    //         decode_target_address(&instruction, current_address, 14, 5);
 
-                        queue.push(target_address);
-                        jump_addresses.insert(target_address);
-                        is_prologue = false;
-                    }
-                    "bl" => {
+                    //     queue.push(target_address);
+                    //     jump_addresses.insert(target_address);
+                    //     is_prologue = false;
+                    // }
+                    Instruction::BranchWithLink { target } => {
                         is_prologue = false;
                         break;
                     }
-                    "sub" if stack_entry_size.is_none() && is_prologue => {
-                        let ops = arch_detail.arm64().unwrap().operands().collect::<Vec<_>>();
-
-                        if get_register_id_from_arm_operand(&ops[0]) == Some(Arm64Reg::ARM64_REG_SP)
-                            && get_register_id_from_arm_operand(&ops[1])
-                                == Some(Arm64Reg::ARM64_REG_SP)
-                            && let Some(imm) = get_immediate_from_arm_operand(&ops[2])
-                        {
-                            stack_entry_size = Some(imm);
-                            eprintln!("Stack entry size: {}", stack_entry_size.unwrap());
-                        }
+                    Instruction::SubImmediate {
+                        destination: Register::SP,
+                        operand,
+                        source: Register::SP,
+                        variant: SizeVariant::Reg64,
+                    } if stack_entry_size.is_none() && is_prologue => {
+                        stack_entry_size = Some(*operand);
+                        eprintln!("Stack entry size: {}", stack_entry_size.unwrap());
                     }
                     _ => {
                         // eprintln!("Skipping instruction: {} {}", instruction.mnemonic().unwrap(), instruction.op_str().unwrap());

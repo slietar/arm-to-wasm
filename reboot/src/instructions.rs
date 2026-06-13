@@ -752,6 +752,17 @@ impl Instruction {
 
         Self::Unknown
     }
+
+    pub fn decode_bytes(data: &[u8]) -> Vec<Self> {
+        (0..(data.len() / (INSTRUCTION_SIZE as usize)))
+            .into_par_iter()
+            .map(|instruction_index| {
+                let offset = instruction_index * (INSTRUCTION_SIZE as usize);
+                let bytes: &[_; 4] = &data[offset..][0..4].try_into().unwrap();
+                Instruction::decode(u32::from_le_bytes(*bytes))
+            })
+            .collect::<Vec<_>>()
+    }
 }
 
 pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
@@ -780,17 +791,23 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
                 let instant = Instant::now();
 
-                let instructions = (0..(section_header.sh_size / INSTRUCTION_SIZE)).into_par_iter().map(|instruction_index| {
-                    let offset = section_header.sh_offset + (instruction_index * INSTRUCTION_SIZE);
-                    let instruction_bytes =
-                        &elf_bytes[(offset as usize)..((offset + INSTRUCTION_SIZE) as usize)];
-                    let instruction_value =
-                        u32::from_le_bytes(instruction_bytes.try_into().unwrap());
+                let instructions = (0..(section_header.sh_size / INSTRUCTION_SIZE))
+                    .into_par_iter()
+                    .map(|instruction_index| {
+                        let offset =
+                            section_header.sh_offset + (instruction_index * INSTRUCTION_SIZE);
+                        let instruction_bytes =
+                            &elf_bytes[(offset as usize)..((offset + INSTRUCTION_SIZE) as usize)];
+                        let instruction_value =
+                            u32::from_le_bytes(instruction_bytes.try_into().unwrap());
 
-                    Instruction::decode(instruction_value)
-                });
+                        Instruction::decode(instruction_value)
+                    });
 
-                let unknown_count = instructions.clone().filter(|instruction| matches!(instruction, Instruction::Unknown)).count();
+                let unknown_count = instructions
+                    .clone()
+                    .filter(|instruction| matches!(instruction, Instruction::Unknown))
+                    .count();
 
                 let duration = instant.elapsed();
 
@@ -798,20 +815,26 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                     "Decoded {} instructions in {:?} ({:.2} M instructions/sec)",
                     section_header.sh_size / INSTRUCTION_SIZE,
                     duration,
-                    (section_header.sh_size / INSTRUCTION_SIZE) as f64 / duration.as_secs_f64() / 1e6
+                    (section_header.sh_size / INSTRUCTION_SIZE) as f64
+                        / duration.as_secs_f64()
+                        / 1e6
                 );
 
                 // unknown_counts.insert("foo".to_string(), unknown_count);
 
-                for (instruction_index, instruction) in instructions.collect::<Vec<_>>().into_iter().enumerate() {
-                    let offset = section_header.sh_offset + ((instruction_index as u64) * INSTRUCTION_SIZE);
+                for (instruction_index, instruction) in
+                    instructions.collect::<Vec<_>>().into_iter().enumerate()
+                {
+                    let offset =
+                        section_header.sh_offset + ((instruction_index as u64) * INSTRUCTION_SIZE);
                     let instruction_bytes =
                         &elf_bytes[(offset as usize)..((offset + INSTRUCTION_SIZE) as usize)];
                     let instruction_value =
                         u32::from_le_bytes(instruction_bytes.try_into().unwrap());
                     let instruction = Instruction::decode(instruction_value);
 
-                    let address = section_header.sh_addr + ((instruction_index as u64) * INSTRUCTION_SIZE);
+                    let address =
+                        section_header.sh_addr + ((instruction_index as u64) * INSTRUCTION_SIZE);
 
                     println!("  [{:#010x}] {:?}", address, instruction);
 
@@ -843,9 +866,7 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("Unknown instruction counts:");
 
-    let mut unknown_counts = unknown_counts
-        .iter()
-        .collect::<Vec<_>>();
+    let mut unknown_counts = unknown_counts.iter().collect::<Vec<_>>();
 
     unknown_counts.sort_by_key(|(_, count)| *count);
 
