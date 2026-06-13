@@ -229,6 +229,50 @@ impl Shift {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Condition {
+    EQ,
+    NE,
+    CS,
+    CC,
+    MI,
+    PL,
+    VS,
+    VC,
+    HI,
+    LS,
+    GE,
+    LT,
+    GT,
+    LE,
+    AL,
+    NV,
+}
+
+impl Condition {
+    fn decode(value: u32) -> Self {
+        match value {
+            0b0000 => Condition::EQ,
+            0b0001 => Condition::NE,
+            0b0010 => Condition::CS,
+            0b0011 => Condition::CC,
+            0b0100 => Condition::MI,
+            0b0101 => Condition::PL,
+            0b0110 => Condition::VS,
+            0b0111 => Condition::VC,
+            0b1000 => Condition::HI,
+            0b1001 => Condition::LS,
+            0b1010 => Condition::GE,
+            0b1011 => Condition::LT,
+            0b1100 => Condition::GT,
+            0b1101 => Condition::LE,
+            0b1110 => Condition::AL,
+            0b1111 => Condition::NV,
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Instruction {
     AddImmediate {
@@ -247,6 +291,10 @@ pub enum Instruction {
     },
     Branch {
         target: i64,
+    },
+    BranchConditionally {
+        target: i64,
+        condition: Condition,
     },
     BranchWithLink {
         target: i64,
@@ -660,7 +708,20 @@ impl Instruction {
             0b0001_0100_0000_0000_0000_0000_0000_0000,
         ) {
             return Self::Branch {
-                target: sign_extend(get_bits(value, 0, 26), 26) as i64,
+                target: bytes.immediate(0, 26, true) as i64,
+            };
+        }
+
+        // B.cond
+        // Branch conditionally
+        if equal_masked(
+            value,
+            0b1111_1111_0000_0000_0000_0000_0001_0000,
+            0b0101_0100_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::BranchConditionally {
+                target: bytes.immediate(5, 19, true) as i64,
+                condition: Condition::decode(get_bits(value, 0, 4)),
             };
         }
 
@@ -674,7 +735,7 @@ impl Instruction {
             0b1001_0100_0000_0000_0000_0000_0000_0000,
         ) {
             return Self::BranchWithLink {
-                target: sign_extend(get_bits(value, 0, 26), 26) as i64,
+                target: bytes.immediate(0, 26, true) as i64,
             };
         }
 

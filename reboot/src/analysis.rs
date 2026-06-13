@@ -165,15 +165,16 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                         is_prologue = false;
                         break;
                     }
-                    // Instruction::ConditionalBranch { target } => {
-                    //     let target_address =
-                    //         decode_target_address(&instruction, current_address, 19, 5);
-                    //     // eprintln!("Cond Branch target address: {:#x}", target_address);
+                    Instruction::BranchConditionally { target, condition } => {
+                        let target_address = ((current_address as i64)
+                            + (*target as i64) * (INSTRUCTION_SIZE as i64))
+                            as u64;
+                        eprintln!("Cond Branch target address: {:#x}", target_address);
 
-                    //     queue.push(target_address);
-                    //     jump_addresses.insert(target_address);
-                    //     is_prologue = false;
-                    // }
+                        queue.push(target_address);
+                        jump_addresses.insert(target_address);
+                        is_prologue = false;
+                    }
                     // "tbnz" | "tbz" => {
                     //     let target_address =
                     //         decode_target_address(&instruction, current_address, 14, 5);
@@ -184,7 +185,6 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                     // }
                     Instruction::BranchWithLink { target } => {
                         is_prologue = false;
-                        break;
                     }
                     Instruction::SubImmediate {
                         destination: Register::SP,
@@ -194,6 +194,10 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                     } if stack_entry_size.is_none() && is_prologue => {
                         stack_entry_size = Some(*operand);
                         eprintln!("Stack entry size: {}", stack_entry_size.unwrap());
+                    }
+                    Instruction::Return { target } => {
+                        is_prologue = false;
+                        break;
                     }
                     _ => {
                         // eprintln!("Skipping instruction: {} {}", instruction.mnemonic().unwrap(), instruction.op_str().unwrap());
