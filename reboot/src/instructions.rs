@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use capstone::arch::BuildsCapstone as _;
 
 use crate::{
@@ -180,6 +182,7 @@ impl Extend {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShiftExtend {
+    None,
     UXTW,
     LSL,
     SXTW,
@@ -189,11 +192,12 @@ pub enum ShiftExtend {
 impl ShiftExtend {
     fn decode(value: u32) -> Self {
         match value {
+            0b000 => ShiftExtend::None,
             0b010 => ShiftExtend::UXTW,
             0b011 => ShiftExtend::LSL,
             0b110 => ShiftExtend::SXTW,
             0b111 => ShiftExtend::SXTX,
-            _ => unreachable!(),
+            _ => panic!("invalid shift extend encoding: {value:03b}"),
         }
     }
 }
@@ -459,7 +463,7 @@ impl Instruction {
             //     value: bytes.register(0, false),
             // };
 
-            todo!()
+            // todo!()
         }
 
         // STRH (immediate)
@@ -761,6 +765,8 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .unwrap();
 
+    let mut unknown_counts = HashMap::new();
+
     if let Some(section_headers) = section_headers_opt {
         for section_header in section_headers {
             if (section_header.sh_flags & (elf::abi::SHF_EXECINSTR as u64)) != 0 {
@@ -781,7 +787,7 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
                     let address = section_header.sh_addr + (instruction_index * INSTRUCTION_SIZE);
 
-                    println!("  [{:#010x}] {:?}", address, instruction);
+                    // println!("  [{:#010x}] {:?}", address, instruction);
 
                     if let Instruction::Unknown = instruction {
                         // if true {
@@ -789,17 +795,36 @@ pub fn decode_file(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             disassembler.disasm_all(instruction_bytes, address).unwrap();
 
                         for capstone_instruction in disassembled.iter() {
-                            println!(
-                                "                 {} {} {:032b}",
-                                capstone_instruction.mnemonic().unwrap(),
-                                capstone_instruction.op_str().unwrap(),
-                                instruction_value,
-                            );
+                            let mnemonic = capstone_instruction.mnemonic().unwrap();
+
+                            unknown_counts
+                                .entry(mnemonic.to_string())
+                                .and_modify(|count| *count += 1)
+                                .or_insert(1);
+
+                            // println!(
+                            //     "                 {} {} {:032b}",
+                            //     mnemonic,
+                            //     capstone_instruction.op_str().unwrap(),
+                            //     instruction_value,
+                            // );
                         }
                     }
                 }
             }
         }
+    }
+
+    eprintln!("Unknown instruction counts:");
+
+    let mut unknown_counts = unknown_counts
+        .iter()
+        .collect::<Vec<_>>();
+
+    unknown_counts.sort_by_key(|(_, count)| *count);
+
+    for (mnemonic, count) in unknown_counts {
+        eprintln!("  {:<8} {}", mnemonic, count);
     }
 
     Ok(())
