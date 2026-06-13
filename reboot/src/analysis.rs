@@ -11,7 +11,30 @@ use crate::{
     },
 };
 
-pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+#[derive(Debug)]
+struct Routine {
+    address: u64,
+    name: Option<String>,
+    stack_size: Option<u64>,
+    variables: HashMap<i32, SizeVariant>,
+}
+
+#[derive(Debug)]
+pub struct Analysis {
+    entry_routine_index: Option<usize>,
+    routines: Vec<Routine>,
+}
+
+#[derive(Debug)]
+struct StackAccess {
+    address: u64,
+    offset: i32,
+    size: SizeVariant,
+    read: bool,
+    write: bool,
+}
+
+pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>> {
     let elf_file = elf::ElfBytes::<elf::endian::AnyEndian>::minimal_parse(&elf_bytes)?;
     let (section_headers_opt, section_name_table_opt) = elf_file.section_headers_with_strtab()?;
     let section_headers = section_headers_opt
@@ -21,17 +44,12 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let section_name_table =
         section_name_table_opt.ok_or_else(|| "ELF has no section name string table".to_string())?;
 
-    #[derive(Debug)]
-    struct Routine {
-        name: Option<String>,
-    }
-
-    let mut routines = HashMap::<u64, Routine>::new();
+    let mut routines_names = HashMap::<u64, Option<String>>::new();
 
     let entry_address = elf_file.ehdr.e_entry;
 
     if entry_address != 0 {
-        routines.insert(entry_address, Routine { name: None });
+        routines_names.insert(entry_address, None);
     }
 
     if let Some((symbol_table, symbol_string_table)) = elf_file.symbol_table()? {
@@ -44,16 +62,14 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
                 // let section_address = section.sh_addr;
 
-                routines.insert(
+                routines_names.insert(
                     // section_address + symbol.st_value,
                     symbol.st_value,
-                    Routine {
-                        name: Some(
+                        Some(
                             symbol_string_table
                                 .get(symbol.st_name as usize)?
                                 .to_string(),
                         ),
-                    },
                 );
             }
         }
@@ -79,9 +95,9 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                     + ((instruction_index as i64) + (*target as i64)) * (INSTRUCTION_SIZE as i64))
                     as u64;
 
-                routines
+                routines_names
                     .entry(target_address)
-                    .or_insert_with(|| Routine { name: None });
+                    .or_insert_with(|| None);
             }
         }
     }
@@ -98,7 +114,9 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
 
-    for (&routine_address, routine) in &routines {
+    let mut routines = Vec::new();
+
+    for (&routine_address, routine_name) in &routines_names {
         let segment = executable_segments
             .iter()
             .find(|segment| {
@@ -110,7 +128,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!(
             "\nRoutine at {:#x} ({})",
             routine_address,
-            routine.name.as_deref().unwrap_or("<unknown>"),
+            routine_name.as_deref().unwrap_or("<unknown>"),
         );
 
         let segment_data = &elf_bytes
@@ -124,15 +142,6 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
         // Prologue = no branching instruction yet
         let mut is_prologue = true;
-
-        #[derive(Debug)]
-        struct StackAccess {
-            address: u64,
-            offset: i32,
-            size: SizeVariant,
-            read: bool,
-            write: bool,
-        }
 
         let mut stack_accesses = Vec::<StackAccess>::new();
 
@@ -155,6 +164,17 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                     branch_address + (instruction_index as u64) * INSTRUCTION_SIZE;
 
                 if handled_addresses.contains(&current_address) {
+                    break;
+                }
+
+                // Catches branches to a function that makes no calls or to a function that never returns
+                if (current_address != routine_address) && let Some(routine_name) = routines_names.get(&current_address) {
+                    eprintln!(
+                        "Stopping at address {:#x} of routine {}",
+                        current_address,
+                        routine_name.as_deref().unwrap(),
+                    );
+
                     break;
                 }
 
@@ -364,16 +384,37 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        routines.push(Routine {
+            address: routine_address,
+            name: routine_name.clone(),
+            stack_size: stack_entry_size,
+            variables: variables.clone(),
+        });
+
         let mut variables = variables.into_iter().collect::<Vec<_>>();
         variables.sort_by_key(|(offset, size)| *offset);
 
         for (offset, size) in variables {
-            eprintln!("Variable at SP{:+#}: {:?}", offset, size);
+            // eprintln!("Variable at SP{:+#}: {:?}", offset, size);
         }
+
     }
 
     // eprintln!("Found {} unique function addresses", routines.len());
     // eprintln!("Function addresses: {:#x?}", routines.iter().filter(|(_, routine)| routine.name.is_none()).map(|(addr, _)| addr).collect::<Vec<_>>());
+
+    Ok(Analysis {
+        entry_routine_index: routines_names
+            .keys()
+            .position(|&addr| addr == entry_address),
+        routines,
+    })
+}
+
+pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let analysis = analyze(elf_bytes)?;
+
+    eprintln!("Analysis result: {:#?}", analysis);
 
     Ok(())
 }
