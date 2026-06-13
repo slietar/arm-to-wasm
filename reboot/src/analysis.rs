@@ -5,14 +5,10 @@ use elf::section;
 use crate::{
     INSTRUCTION_SIZE,
     instructions::{Address, AddressingMode, Instruction, Register, SizeVariant},
-    translator::{
-        ExecutableSegment, bit_mask, decode_bl_target, get_arm_operand, get_register_id,
-        sign_extend,
-    },
 };
 
 #[derive(Debug)]
-struct Routine {
+pub struct Routine {
     address: u64,
     name: Option<String>,
     stack_size: Option<u64>,
@@ -21,8 +17,15 @@ struct Routine {
 
 #[derive(Debug)]
 pub struct Analysis {
-    entry_routine_index: Option<usize>,
-    routines: Vec<Routine>,
+    pub entry_routine_index: Option<usize>,
+    pub routines: Vec<Routine>,
+}
+
+#[derive(Debug)]
+pub struct ExecutableSegment {
+    pub address: u64,
+    pub source_offset: u64,
+    pub size: u64,
 }
 
 #[derive(Debug)]
@@ -65,11 +68,11 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                 routines_names.insert(
                     // section_address + symbol.st_value,
                     symbol.st_value,
-                        Some(
-                            symbol_string_table
-                                .get(symbol.st_name as usize)?
-                                .to_string(),
-                        ),
+                    Some(
+                        symbol_string_table
+                            .get(symbol.st_name as usize)?
+                            .to_string(),
+                    ),
                 );
             }
         }
@@ -95,9 +98,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                     + ((instruction_index as i64) + (*target as i64)) * (INSTRUCTION_SIZE as i64))
                     as u64;
 
-                routines_names
-                    .entry(target_address)
-                    .or_insert_with(|| None);
+                routines_names.entry(target_address).or_insert_with(|| None);
             }
         }
     }
@@ -134,15 +135,20 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
         let segment_data = &elf_bytes
             [(segment.source_offset as usize)..((segment.source_offset + segment.size) as usize)];
 
+        let routine_data_offset = segment.source_offset + (routine_address - segment.address);
+
         let mut handled_addresses = HashSet::new();
         let mut queue = vec![routine_address];
-        let mut jump_addresses = HashSet::new();
+        let mut block_start_addresses = HashSet::new();
+        let mut jump_source_addresses = HashSet::new();
+        block_start_addresses.insert(routine_address);
 
         let mut stack_entry_size = None;
 
         // Prologue = no branching instruction yet
         let mut is_prologue = true;
 
+        let mut is_block_start = true;
         let mut stack_accesses = Vec::<StackAccess>::new();
 
         while !queue.is_empty() {
@@ -168,7 +174,9 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                 }
 
                 // Catches branches to a function that makes no calls or to a function that never returns
-                if (current_address != routine_address) && let Some(routine_name) = routines_names.get(&current_address) {
+                if (current_address != routine_address)
+                    && let Some(routine_name) = routines_names.get(&current_address)
+                {
                     eprintln!(
                         "Stopping at address {:#x} of routine {}",
                         current_address,
@@ -176,6 +184,11 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                     );
 
                     break;
+                }
+
+                if is_block_start {
+                    block_start_addresses.insert(current_address);
+                    is_block_start = false;
                 }
 
                 handled_addresses.insert(current_address);
@@ -190,7 +203,8 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                         // eprintln!("Branch target address: {:#x}", target_address);
 
                         queue.push(target_address);
-                        jump_addresses.insert(target_address);
+                        block_start_addresses.insert(target_address);
+                        jump_source_addresses.insert(current_address);
                         is_prologue = false;
                         break;
                     }
@@ -201,7 +215,9 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                         // eprintln!("Cond Branch target address: {:#x}", target_address);
 
                         queue.push(target_address);
-                        jump_addresses.insert(target_address);
+                        block_start_addresses.insert(target_address);
+                        jump_source_addresses.insert(current_address);
+                        is_block_start = true;
                         is_prologue = false;
                     }
                     Instruction::TestBitAndBranchIfNonzero {
@@ -221,7 +237,9 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                             as u64;
 
                         queue.push(target_address);
-                        jump_addresses.insert(target_address);
+                        block_start_addresses.insert(target_address);
+                        jump_source_addresses.insert(current_address);
+                        is_block_start = true;
                         is_prologue = false;
                     }
                     Instruction::BranchWithLink { target } => {
@@ -362,7 +380,35 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             }
         }
 
-        eprintln!("Stack entry size: {:?}", stack_entry_size);
+        // eprintln!("Block start addresses: {:#x?}", jump_source_addresses);
+        // eprintln!("Jump destination addresses: {:#x?}", block_start_addresses);
+
+        let last_address = *handled_addresses.iter().max().unwrap();
+
+        let mut blocks = block_start_addresses
+            .iter()
+            .map(|&addr| {
+                let next_addr = jump_source_addresses
+                    .iter()
+                    .filter(|&&a| a >= addr)
+                    .min()
+                    .copied()
+                    .unwrap_or(last_address)
+                    + INSTRUCTION_SIZE;
+
+                addr..next_addr
+            })
+            .collect::<Vec<_>>();
+
+        blocks.sort_by_key(|range| range.start);
+
+        // eprintln!("Blocks: {:#x?}", blocks);
+
+        // eprintln!("Blocks: {:#x?}", blocks);
+
+        // eprintln!("Stack entry size: {:?}", stack_entry_size);
+
+        // eprintln!("Handled addresses: {:#x?}", handled_addresses);
         // eprintln!("Jump addresses: {:#x?}", jump_addresses);
         // eprintln!("Stack accesses: {:#?}", stack_accesses);
 
@@ -397,7 +443,6 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
         for (offset, size) in variables {
             // eprintln!("Variable at SP{:+#}: {:?}", offset, size);
         }
-
     }
 
     // eprintln!("Found {} unique function addresses", routines.len());
@@ -414,7 +459,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
 pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let analysis = analyze(elf_bytes)?;
 
-    eprintln!("Analysis result: {:#?}", analysis);
+    // eprintln!("Analysis result: {:#?}", analysis);
 
     Ok(())
 }
