@@ -1,3 +1,5 @@
+use std::{ffi::CString, marker::PhantomData};
+
 use binaryen::ffi as by;
 
 unsafe extern "C" {
@@ -72,8 +74,8 @@ impl Module {
         unsafe { by::BinaryenInt64() }
     }
 
-    pub fn const_<T: ToBinaryenLiteral>(&mut self, value: T) -> by::BinaryenExpressionRef {
-        unsafe { by::BinaryenConst(self.by_module, value.to_literal()) }
+    pub fn const_<T: ToBinaryenLiteral>(&mut self, value: T) -> Expression {
+        Expression(unsafe { by::BinaryenConst(self.by_module, value.to_literal()) })
     }
 
     pub fn none(&self) -> by::BinaryenType {
@@ -91,9 +93,9 @@ impl Module {
     pub fn block(
         &self,
         type_: by::BinaryenType,
-        expressions: &[by::BinaryenExpressionRef],
-    ) -> by::BinaryenExpressionRef {
-        unsafe {
+        expressions: &[Expression],
+    ) -> Expression {
+        Expression(unsafe {
             by::BinaryenBlock(
                 self.by_module,
                 std::ptr::null(),
@@ -101,11 +103,43 @@ impl Module {
                 expressions.len() as u32,
                 type_,
             )
+        })
+    }
+
+    pub fn function(
+        &self,
+        name: &str,
+        params: &[by::BinaryenType],
+        result: by::BinaryenType,
+        locals: &[by::BinaryenType],
+        body: Expression,
+    ) -> by::BinaryenFunctionRef {
+        let name_cstr = CString::new(name).unwrap();
+
+        unsafe {
+            by::BinaryenAddFunction(
+                self.by_module,
+                name_cstr.as_ptr(),
+                self.tuple(params),
+                result,
+                locals.as_ptr() as *mut by::BinaryenType,
+                locals.len() as u32,
+                body.0,
+            )
         }
     }
 
-    pub fn nop(&self) -> by::BinaryenExpressionRef {
-        unsafe { by::BinaryenNop(self.by_module) }
+    pub fn tuple(&self, types: &[by::BinaryenType]) -> by::BinaryenType {
+        unsafe {
+            by::BinaryenTypeCreate(
+                types.as_ptr() as *mut by::BinaryenType,
+                types.len() as u32,
+            )
+        }
+    }
+
+    pub fn nop(&self) -> Expression {
+        Expression(unsafe { by::BinaryenNop(self.by_module) })
     }
 }
 
