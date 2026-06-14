@@ -19,7 +19,20 @@ pub const ZERO_FLAG_LOCAL_INDEX: u32 = 3;
 pub const OVERFLOW_FLAG_LOCAL_INDEX: u32 = 4;
 
 pub const FIRST_GP_REGISTER_LOCAL_INDEX: u32 = 5;
-pub const SCRATCH_LOCAL_INDEX: u32 = 5 + GENERAL_PURPOSE_REGISTER_COUNT;
+pub const INTERNAL_CALL_RETURN_LOCAL_INDEX: u32 = 5 + GENERAL_PURPOSE_REGISTER_COUNT;
+pub const SVC_CALL_RETURN_LOCAL_INDEX: u32 = INTERNAL_CALL_RETURN_LOCAL_INDEX + 1;
+
+pub const SVC_PARAM_REGISTERS: [Register; 7] = [
+    Register::X8,
+    Register::X0,
+    Register::X1,
+    Register::X2,
+    Register::X3,
+    Register::X4,
+    Register::X5,
+];
+
+pub const SVC_RETURN_REGISTERS: [Register; 2] = [Register::X0, Register::X1];
 
 fn get_reg_local_index(register: Register) -> u32 {
     use Register::*;
@@ -131,6 +144,24 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         .map(|_| module.i64())
         .collect::<Vec<_>>();
 
+    let svc_function_name = "supervisor_call";
+    let svc_return_type = module.tuple_type(
+        &SVC_RETURN_REGISTERS
+            .iter()
+            .map(|_| module.i64())
+            .collect::<Vec<_>>(),
+    );
+
+    module.import_function(
+        svc_function_name,
+        "ref",
+        "supervisor_call",
+        &(std::iter::once(module.i32())
+            .chain(SVC_PARAM_REGISTERS.iter().map(|_| module.i64()))
+            .collect::<Vec<_>>()),
+        svc_return_type,
+    );
+
     let return_type = module.tuple_type(&param_types);
 
     let local_types = {
@@ -150,9 +181,11 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
         // Additional locals for temporary values
         local_types.push(return_type);
+        local_types.push(svc_return_type);
 
         local_types
     };
+
     let elf_file = ElfBytes::<elf::endian::AnyEndian>::minimal_parse(elf_bytes)?;
     let memory_info = set_up_memory("memory", elf_bytes, elf_file, &module);
 
@@ -265,23 +298,21 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             .collect::<Vec<_>>();
 
                         block_exprs.push(module.local_set(
-                            param_count + SCRATCH_LOCAL_INDEX,
+                            param_count + INTERNAL_CALL_RETURN_LOCAL_INDEX,
                             module.call(target_function_name, &arg_exprs, return_type),
                         ));
 
                         for (param_index, param_register) in param_registers.iter().enumerate() {
-                            block_exprs.push(
-                                module.local_set(
-                                    param_count + get_reg_local_index(*param_register),
-                                    module.tuple_extract(
-                                        module.local_get(
-                                            param_count + SCRATCH_LOCAL_INDEX,
-                                            return_type,
-                                        ),
-                                        param_index as u32,
+                            block_exprs.push(module.local_set(
+                                param_count + get_reg_local_index(*param_register),
+                                module.tuple_extract(
+                                    module.local_get(
+                                        param_count + INTERNAL_CALL_RETURN_LOCAL_INDEX,
+                                        return_type,
                                     ),
+                                    param_index as u32,
                                 ),
-                            );
+                            ));
                         }
                     }
                     Instruction::Return { target } => {
@@ -293,6 +324,33 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             .collect::<Vec<_>>();
 
                         block_exprs.push(module.return_(module.tuple(&return_exprs)));
+                    }
+                    Instruction::SupervisorCall { argument } => {
+                        let arg_exprs = std::iter::once(module.const_(*argument as u32))
+                            .chain(SVC_PARAM_REGISTERS.iter().map(|reg| {
+                                get_reg_expr(&module, *reg, SizeVariant::Reg64, param_count)
+                            }))
+                            .collect::<Vec<_>>();
+
+                        block_exprs.push(module.local_set(
+                            param_count + SVC_CALL_RETURN_LOCAL_INDEX,
+                            module.call(svc_function_name, &arg_exprs, svc_return_type),
+                        ));
+
+                        for (return_index, return_register) in
+                            SVC_RETURN_REGISTERS.iter().enumerate()
+                        {
+                            block_exprs.push(module.local_set(
+                                param_count + get_reg_local_index(*return_register),
+                                module.tuple_extract(
+                                    module.local_get(
+                                        param_count + SVC_CALL_RETURN_LOCAL_INDEX,
+                                        svc_return_type,
+                                    ),
+                                    return_index as u32,
+                                ),
+                            ));
+                        }
                     }
                     _ => {}
                 }
@@ -352,8 +410,20 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    if let Some(entry_routine_index) = analysis.entry_routine_index {
+        // let routine_name = analysis.routines[entry_routine_index]
+        //     .name
+        //     .as_deref()
+        //     .unwrap();
+        let routine_name = "entry";
+        let function_name = &function_names[entry_routine_index];
+
+        module.export_function(function_name, routine_name);
+    }
+
+    module.print();
     module.validate();
-    // module.optimize();
+    module.optimize();
     module.print();
     module.save(&mut File::create("output.wasm")?)?;
 

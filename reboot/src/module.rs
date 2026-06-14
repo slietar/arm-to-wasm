@@ -402,6 +402,45 @@ impl Module {
     }
 }
 
+impl Module {
+    pub fn import_function(
+        &self,
+        internal_name: &str,
+        external_module_name: &str,
+        external_function_name: &str,
+        params: &[by::BinaryenType],
+        result: by::BinaryenType,
+    ) {
+        let internal_name_cstr = CString::new(internal_name).unwrap();
+        let external_module_name_cstr = CString::new(external_module_name).unwrap();
+        let external_function_name_cstr = CString::new(external_function_name).unwrap();
+
+        unsafe {
+            by::BinaryenAddFunctionImport(
+                self.by_module,
+                internal_name_cstr.as_ptr(),
+                external_module_name_cstr.as_ptr(),
+                external_function_name_cstr.as_ptr(),
+                self.tuple_type(params),
+                result,
+            )
+        }
+    }
+
+    pub fn export_function(&self, internal_name: &str, external_name: &str) {
+        let internal_name_cstr = CString::new(internal_name).unwrap();
+        let external_name_cstr = CString::new(external_name).unwrap();
+
+        unsafe {
+            by::BinaryenAddFunctionExport(
+                self.by_module,
+                internal_name_cstr.as_ptr(),
+                external_name_cstr.as_ptr(),
+            );
+        }
+    }
+}
+
 impl Drop for Module {
     fn drop(&mut self) {
         unsafe {
