@@ -1,5 +1,18 @@
 use wasmtime::*;
 
+#[derive(Debug)]
+struct ExitError {
+    code: u32,
+}
+
+impl std::fmt::Display for ExitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ExitError with code: {}", self.code)
+    }
+}
+
+impl std::error::Error for ExitError {}
+
 fn main() -> wasmtime::Result<()> {
     let engine = Engine::default();
 
@@ -25,7 +38,7 @@ fn main() -> wasmtime::Result<()> {
             },
             0x5d => {
                 eprintln!("Exit called with code: {}", x0);
-                return Err(wasmtime::Trap::Interrupt.into());
+                return Err(ExitError { code: x0 as u32 }.into());
             },
             _ => {
                 eprint!("syscall_handler called with param: {}, x8: {}, x0: {}, x1: {}, x2: {}, x3: {}, x4: {}, x5: {}\n", param, x8, x0, x1, x2, x3, x4, x5);
@@ -50,8 +63,9 @@ fn main() -> wasmtime::Result<()> {
         Ok(()) => {
             eprintln!("-> WASM returned");
         },
-        Err(e) if e.downcast_ref::<wasmtime::Trap>() == Some(&wasmtime::Trap::Interrupt) => {
-            eprintln!("-> WASM execution interrupted (exit called)");
+        Err(e) if e.downcast_ref::<ExitError>().is_some() => {
+            let exit_error = e.downcast_ref::<ExitError>().unwrap();
+            eprintln!("-> WASM execution interrupted (exit called) with code: {}", exit_error.code);
         },
         Err(e) => {
             return Err(e);
