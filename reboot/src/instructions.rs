@@ -99,6 +99,12 @@ pub enum SizeVariant {
     Reg64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SizedRegister {
+    pub register: Register,
+    pub variant: SizeVariant,
+}
+
 #[derive(Debug, Clone)]
 pub struct Address {
     pub base: Register,

@@ -8,7 +8,7 @@ use elf::section;
 use crate::{
     INSTRUCTION_SIZE,
     instruction_helper::InstructionInfo as _,
-    instructions::{Address, AddressingMode, Instruction, Register, SizeVariant},
+    instructions::{Address, AddressingMode, Instruction, Register, SizeVariant, SizedRegister},
 };
 
 #[derive(Debug)]
@@ -522,7 +522,8 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
 
         let segment_instructions = Instruction::decode_bytes(&segment_data);
 
-        let walker = RegisterReadWalker::default();
+        type Walker = RegisterReadWalker;
+        let walker = Walker::default();
 
         let mut queue = vec![(0, walker)];
         let mut exit_walkers = Vec::new();
@@ -546,7 +547,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                         + block.instruction_count) as usize)];
 
             for instruction in block_instructions {
-                walker.walk(instruction);
+                walker.process(instruction);
             }
 
             let mut inserted = false;
@@ -566,7 +567,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             }
         }
 
-        eprintln!("Exit walkers: {:#?}", exit_walkers);
+        eprintln!("Exit walker: {:#?}", Walker::merge_all(&exit_walkers));
 
         // Variable analysis
 
@@ -620,35 +621,48 @@ pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> 
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RegisterReadWalker {
-    registers_read: HashSet<Register>,
+    registers_read: HashSet<SizedRegister>,
     registers_written: HashSet<Register>,
 }
 
 impl RegisterReadWalker {
-    // fn merge(&mut self, other: &RegisterReadWalker) {
-    //     RegisterReadWalker {
-    //         registers_read: self
-    //             .registers_read
-    //             .union(&other.registers_read)
-    //             .copied()
-    //             .collect(),
-    //         registers_written: self
-    //             .registers_written
-    //             .intersection(&other.registers_written)
-    //             .copied()
-    //             .collect(),
-    //     };
-    // }
+    fn merge(&mut self, other: &RegisterReadWalker) -> RegisterReadWalker {
+        RegisterReadWalker {
+            registers_read: self
+                .registers_read
+                .union(&other.registers_read)
+                .copied()
+                .collect(),
+            registers_written: self
+                .registers_written
+                .union(&other.registers_written)
+                .copied()
+                .collect(),
+        }
+    }
 
-    fn walk(&mut self, instruction: &Instruction) {
+    fn merge_all(walkers: &[RegisterReadWalker]) -> RegisterReadWalker {
+        walkers
+            .iter()
+            .fold(RegisterReadWalker::default(), |mut acc, walker| {
+                acc.merge(walker)
+            })
+    }
+
+    fn process(&mut self, instruction: &Instruction) {
         self.registers_read.extend(
             instruction
                 .registers_read()
                 .iter()
-                .filter(|&&reg| !self.registers_written.contains(&reg)),
+                .filter(|&&reg| !self.registers_written.contains(&reg.register)),
         );
-        self.registers_written
-            .extend(instruction.registers_written());
+
+        self.registers_written.extend(
+            instruction
+                .registers_written()
+                .iter()
+                .map(|reg| reg.register),
+        );
     }
 }
 
