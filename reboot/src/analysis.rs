@@ -11,15 +11,16 @@ use crate::{
     instructions::{Address, AddressingMode, Instruction, Register, SizeVariant, SizedRegister},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Routine {
-    address: u64,
-    name: Option<String>,
-    stack_size: Option<u64>,
-    variables: HashMap<i32, SizeVariant>,
+    pub address: u64,
+    pub blocks: Vec<Block>,
+    pub name: Option<String>,
+    pub stack_size: Option<u64>,
+    pub variables: HashMap<i32, SizeVariant>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Analysis {
     pub entry_routine_index: Option<usize>,
     pub routines: Vec<Routine>,
@@ -32,8 +33,8 @@ struct ExecutableSegment {
     pub size: u64,
 }
 
-#[derive(Debug)]
-struct Block {
+#[derive(Debug, Clone)]
+pub struct Block {
     fallthrough_block_index: Option<usize>,
     instruction_count: u64,
     jump_block_index: Option<usize>,
@@ -465,7 +466,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
         });
         block_ends.dedup_by_key(|(address, _)| *address);
 
-        let mut blocks = block_start_addresses
+        let blocks = block_start_addresses
             .iter()
             .map(|&addr| {
                 let (end_addr, end_kind) = block_ends
@@ -590,6 +591,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             name: routine_name.clone(),
             stack_size: stack_entry_size,
             variables: variables.clone(),
+            blocks: blocks.clone(),
         });
 
         let mut variables = variables.into_iter().collect::<Vec<_>>();

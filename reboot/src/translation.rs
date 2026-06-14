@@ -1,40 +1,188 @@
-use std::ffi::CString;
+use std::{ffi::CString, fs::File};
 
 use binaryen::ffi as by;
 use elf::ElfBytes;
 
-use crate::{constants::PAGE_SIZE, module::Module};
+use crate::{
+    constants::PAGE_SIZE,
+    instructions::{Register, SizeVariant},
+    module::{BinaryOp, Expression, Module, UnaryOp},
+};
+
+pub const GENERAL_PURPOSE_REGISTER_COUNT: u32 = 31;
+pub const PARAMETER_REGISTER_COUNT: u32 = 8;
+
+pub const SP_LOCAL_INDEX: u32 = 0;
+pub const CARRY_FLAG_LOCAL_INDEX: u32 = 1;
+pub const FIRST_GP_REGISTER_LOCAL_INDEX: u32 = 2;
+
+fn get_reg_local_index(register: Register) -> u32 {
+    use Register::*;
+
+    match register {
+        SP => SP_LOCAL_INDEX,
+
+        X0 => FIRST_GP_REGISTER_LOCAL_INDEX + 0,
+        X1 => FIRST_GP_REGISTER_LOCAL_INDEX + 1,
+        X2 => FIRST_GP_REGISTER_LOCAL_INDEX + 2,
+        X3 => FIRST_GP_REGISTER_LOCAL_INDEX + 3,
+        X4 => FIRST_GP_REGISTER_LOCAL_INDEX + 4,
+        X5 => FIRST_GP_REGISTER_LOCAL_INDEX + 5,
+        X6 => FIRST_GP_REGISTER_LOCAL_INDEX + 6,
+        X7 => FIRST_GP_REGISTER_LOCAL_INDEX + 7,
+        X8 => FIRST_GP_REGISTER_LOCAL_INDEX + 8,
+        X9 => FIRST_GP_REGISTER_LOCAL_INDEX + 9,
+        X10 => FIRST_GP_REGISTER_LOCAL_INDEX + 10,
+        X11 => FIRST_GP_REGISTER_LOCAL_INDEX + 11,
+        X12 => FIRST_GP_REGISTER_LOCAL_INDEX + 12,
+        X13 => FIRST_GP_REGISTER_LOCAL_INDEX + 13,
+        X14 => FIRST_GP_REGISTER_LOCAL_INDEX + 14,
+        X15 => FIRST_GP_REGISTER_LOCAL_INDEX + 15,
+        X16 => FIRST_GP_REGISTER_LOCAL_INDEX + 16,
+        X17 => FIRST_GP_REGISTER_LOCAL_INDEX + 17,
+        X18 => FIRST_GP_REGISTER_LOCAL_INDEX + 18,
+        X19 => FIRST_GP_REGISTER_LOCAL_INDEX + 19,
+        X20 => FIRST_GP_REGISTER_LOCAL_INDEX + 20,
+        X21 => FIRST_GP_REGISTER_LOCAL_INDEX + 21,
+        X22 => FIRST_GP_REGISTER_LOCAL_INDEX + 22,
+        X23 => FIRST_GP_REGISTER_LOCAL_INDEX + 23,
+        X24 => FIRST_GP_REGISTER_LOCAL_INDEX + 24,
+        X25 => FIRST_GP_REGISTER_LOCAL_INDEX + 25,
+        X26 => FIRST_GP_REGISTER_LOCAL_INDEX + 26,
+        X27 => FIRST_GP_REGISTER_LOCAL_INDEX + 27,
+        X28 => FIRST_GP_REGISTER_LOCAL_INDEX + 28,
+        X29 => FIRST_GP_REGISTER_LOCAL_INDEX + 29,
+        X30 => FIRST_GP_REGISTER_LOCAL_INDEX + 30,
+
+        XZR => unreachable!(),
+    }
+}
+
+fn get_reg_expr(
+    module: &Module,
+    register: Register,
+    variant: SizeVariant,
+    param_count: usize,
+) -> Expression {
+    match register {
+        Register::XZR => match variant {
+            SizeVariant::Reg32 => module.const_(0i32),
+            SizeVariant::Reg64 => module.const_(0i64),
+        },
+        _ => {
+            let local_index = get_reg_local_index(register);
+            let expr = module.local_get((param_count as u32) + local_index, module.i64());
+
+            match variant {
+                SizeVariant::Reg32 => module.unary(
+                    module.binary(
+                        expr,
+                        module.const_(0x00_00_00_00_ff_ff_ff_ffu64),
+                        BinaryOp::And,
+                    ),
+                    UnaryOp::WrapInt64,
+                ),
+                SizeVariant::Reg64 => expr,
+            }
+        }
+    }
+}
 
 pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let analysis = crate::analysis::analyze(elf_bytes)?;
 
     // eprintln!("Analysis result: {:#?}", analysis);
     let mut module = Module::new();
-    let relooper = module.relooper();
 
     let routine_names = analysis
         .routines
         .iter()
         .enumerate()
-        .map(|(routine_index, routine)| format!("routine_{}", routine_index))
+        .map(|(routine_index, routine)| {
+            format!(
+                "routine_{}_{}",
+                routine_index,
+                routine.name.as_deref().unwrap_or("none")
+            )
+        })
         .collect::<Vec<_>>();
+
+    let local_types = {
+        let mut local_types = Vec::new();
+
+        // SP
+        local_types.push(module.i64());
+
+        // Carry flag
+        local_types.push(module.i32());
+
+        // GP registers
+        local_types.extend((0..GENERAL_PURPOSE_REGISTER_COUNT).map(|_| module.i64()));
+
+        local_types
+    };
+
+    let param_registers = [
+        Register::X0,
+        Register::X1,
+        Register::X2,
+        Register::X3,
+        Register::X4,
+        Register::X5,
+        Register::X6,
+        Register::X7,
+    ];
+
+    let param_types = param_registers
+        .iter()
+        .map(|_| module.i64())
+        .collect::<Vec<_>>();
+
+    let return_type = module.tuple(&param_types);
 
     for (routine_index, routine) in analysis.routines.iter().enumerate() {
         let routine_name = &routine_names[routine_index];
 
+        // let relooper = module.relooper();
+
+        let mut exprs = Vec::new();
+
+        for (param_index, param_register) in param_registers.iter().enumerate() {
+            exprs.push(module.local_set(
+                (param_types.len() as u32) + get_reg_local_index(*param_register),
+                module.local_get(param_index as u32, module.i64()),
+            ));
+        }
+
+        for block in &routine.blocks {
+            // relooper.add_block(&block_name, block_expr);
+
+            exprs.push(module.drop(get_reg_expr(
+                &module,
+                Register::X0,
+                SizeVariant::Reg32,
+                param_types.len(),
+            )));
+        }
+
+        exprs.push(module.unreachable());
+
+        let func_block = module.block(module.none(), &exprs);
         let func = module.function(
             routine_name,
-            &[],
-            module.none(),
-            &[],
-            module.nop(),
+            &param_types,
+            return_type,
+            &local_types,
+            func_block,
         );
     }
 
+    module.validate();
+    module.print();
+    module.save(&mut File::create("output.wasm")?)?;
 
     Ok(())
 }
-
 
 #[derive(Debug)]
 struct MappedSegment<'a> {

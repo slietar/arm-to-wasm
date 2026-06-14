@@ -23,8 +23,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // let translator = translate(&elf_bytes)?;
 
-    analysis::main_analyze(&elf_bytes)?;
+    // analysis::main_analyze(&elf_bytes)?;
     // instructions::decode_file(&elf_bytes)?;
+    translation::translate(&elf_bytes)?;
 
     Ok(())
 }
