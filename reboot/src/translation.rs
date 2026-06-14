@@ -246,12 +246,12 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                                 SizeVariant::Reg64 => StoreVariant::I64,
                             },
                             get_reg_expr(&module, *value, *variant, param_count),
-                            get_reg_expr(&module, address.base, SizeVariant::Reg64, param_count),
-                            (address.mode.access_offset()
-                                + (match address.base {
-                                    Register::SP => memory_info.stack_internal_address as i32,
-                                    _ => 0,
-                                })) as u32,
+                            module.binary(
+                                get_reg_expr(&module, address.base, SizeVariant::Reg64, param_count),
+                                module.const_(address.mode.access_offset() as i64),
+                                BinaryOp::Add,
+                            ),
+                            0,
                             8,
                             &memory_info.name,
                         ));
@@ -411,14 +411,36 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(entry_routine_index) = analysis.entry_routine_index {
-        // let routine_name = analysis.routines[entry_routine_index]
-        //     .name
-        //     .as_deref()
-        //     .unwrap();
-        let routine_name = "entry";
-        let function_name = &function_names[entry_routine_index];
+        let arg_exprs = param_registers
+            .iter()
+            .map(|reg| match *reg {
+                Register::SP => module.const_(memory_info.stack_internal_address as i64),
+                _ => module.const_(0i64),
+            })
+            .collect::<Vec<_>>();
 
-        module.export_function(function_name, routine_name);
+        let entry_function_name = "entry";
+        let entry_function = module.function(
+            entry_function_name,
+            &[],
+            module.none(),
+            &[],
+            module.block(
+                module.none(),
+                &[
+                    module.drop(
+                        module.call(
+                            &function_names[entry_routine_index],
+                            &arg_exprs,
+                            module.tuple_type(&param_types),
+                        ),
+                    ),
+                    module.unreachable(),
+                ],
+            ),
+        );
+
+        module.export_function(entry_function_name, "_entry");
     }
 
     module.print();

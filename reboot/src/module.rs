@@ -103,7 +103,7 @@ impl Module {
     pub fn call(
         &self,
         target: &str,
-        operands: &[Expression],
+        arguments: &[Expression],
         return_type: by::BinaryenType,
     ) -> Expression {
         let target_cstr = CString::new(target).unwrap();
@@ -112,14 +112,14 @@ impl Module {
             by::BinaryenCall(
                 self.by_module,
                 target_cstr.as_ptr(),
-                operands.as_ptr() as *mut by::BinaryenExpressionRef,
-                operands.len() as u32,
+                arguments.as_ptr() as *mut by::BinaryenExpressionRef,
+                arguments.len() as u32,
                 return_type,
             )
         })
     }
 
-    pub fn drop(&mut self, expr: Expression) -> Expression {
+    pub fn drop(&self, expr: Expression) -> Expression {
         Expression(unsafe { by::BinaryenDrop(self.by_module, expr.0) })
     }
 
