@@ -1,4 +1,7 @@
-use std::{ffi::CString, marker::PhantomData};
+use std::{
+    ffi::{CStr, CString},
+    marker::PhantomData,
+};
 
 use binaryen::ffi as by;
 
@@ -92,7 +95,9 @@ impl Module {
 
 impl Module {
     pub fn binary(&self, operand1: Expression, operand2: Expression, op: BinaryOp) -> Expression {
-        Expression(unsafe { by::BinaryenBinary(self.by_module, op.to_binaryen_op(), operand1.0, operand2.0) })
+        Expression(unsafe {
+            by::BinaryenBinary(self.by_module, op.to_binaryen_op(), operand1.0, operand2.0)
+        })
     }
 
     pub fn drop(&mut self, expr: Expression) -> Expression {
@@ -103,11 +108,7 @@ impl Module {
         Expression(unsafe { by::BinaryenUnary(self.by_module, op.to_binaryen_op(), operand.0) })
     }
 
-    pub fn block(
-        &self,
-        type_: by::BinaryenType,
-        expressions: &[Expression],
-    ) -> Expression {
+    pub fn block(&self, type_: by::BinaryenType, expressions: &[Expression]) -> Expression {
         Expression(unsafe {
             by::BinaryenBlock(
                 self.by_module,
@@ -156,15 +157,211 @@ impl Module {
 
     pub fn tuple(&self, types: &[by::BinaryenType]) -> by::BinaryenType {
         unsafe {
-            by::BinaryenTypeCreate(
-                types.as_ptr() as *mut by::BinaryenType,
-                types.len() as u32,
-            )
+            by::BinaryenTypeCreate(types.as_ptr() as *mut by::BinaryenType, types.len() as u32)
         }
     }
 
     pub fn nop(&self) -> Expression {
         Expression(unsafe { by::BinaryenNop(self.by_module) })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LoadVariant {
+    I32,
+    I64,
+    I32L8 { signed: bool },
+    I32L16 { signed: bool },
+    I64L8 { signed: bool },
+    I64L16 { signed: bool },
+    I64L32 { signed: bool },
+}
+
+impl LoadVariant {
+    pub fn byte_count(&self) -> u32 {
+        match self {
+            LoadVariant::I32 => 4,
+            LoadVariant::I64 => 8,
+            LoadVariant::I32L8 { .. } => 1,
+            LoadVariant::I32L16 { .. } => 2,
+            LoadVariant::I64L8 { .. } => 1,
+            LoadVariant::I64L16 { .. } => 2,
+            LoadVariant::I64L32 { .. } => 4,
+        }
+    }
+
+    pub fn alignment(&self) -> u32 {
+        match self {
+            LoadVariant::I32 => 4,
+            LoadVariant::I64 => 8,
+            LoadVariant::I32L8 { .. } => 1,
+            LoadVariant::I32L16 { .. } => 2,
+            LoadVariant::I64L8 { .. } => 1,
+            LoadVariant::I64L16 { .. } => 2,
+            LoadVariant::I64L32 { .. } => 4,
+        }
+    }
+
+    pub fn signed(&self) -> bool {
+        match self {
+            LoadVariant::I32 => true,
+            LoadVariant::I64 => true,
+            LoadVariant::I32L8 { signed } => *signed,
+            LoadVariant::I32L16 { signed } => *signed,
+            LoadVariant::I64L8 { signed } => *signed,
+            LoadVariant::I64L16 { signed } => *signed,
+            LoadVariant::I64L32 { signed } => *signed,
+        }
+    }
+
+    pub fn type_(&self, module: &Module) -> by::BinaryenType {
+        match self {
+            LoadVariant::I32 => module.i32(),
+            LoadVariant::I64 => module.i64(),
+            LoadVariant::I32L8 { .. } => module.i32(),
+            LoadVariant::I32L16 { .. } => module.i32(),
+            LoadVariant::I64L8 { .. } => module.i64(),
+            LoadVariant::I64L16 { .. } => module.i64(),
+            LoadVariant::I64L32 { .. } => module.i64(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StoreVariant {
+    I32,
+    I64,
+    I32L8,
+    I32L16,
+    I64L8,
+    I64L16,
+    I64L32,
+}
+
+impl StoreVariant {
+    pub fn byte_count(&self) -> u32 {
+        match self {
+            StoreVariant::I32 => 4,
+            StoreVariant::I64 => 8,
+            StoreVariant::I32L8 => 1,
+            StoreVariant::I32L16 => 2,
+            StoreVariant::I64L8 => 1,
+            StoreVariant::I64L16 => 2,
+            StoreVariant::I64L32 => 4,
+        }
+    }
+
+    pub fn alignment(&self) -> u32 {
+        match self {
+            StoreVariant::I32 => 4,
+            StoreVariant::I64 => 8,
+            StoreVariant::I32L8 => 1,
+            StoreVariant::I32L16 => 2,
+            StoreVariant::I64L8 => 1,
+            StoreVariant::I64L16 => 2,
+            StoreVariant::I64L32 => 4,
+        }
+    }
+
+    pub fn type_(&self, module: &Module) -> by::BinaryenType {
+        match self {
+            StoreVariant::I32 => module.i32(),
+            StoreVariant::I64 => module.i64(),
+            StoreVariant::I32L8 => module.i32(),
+            StoreVariant::I32L16 => module.i32(),
+            StoreVariant::I64L8 => module.i64(),
+            StoreVariant::I64L16 => module.i64(),
+            StoreVariant::I64L32 => module.i64(),
+        }
+    }
+}
+
+impl Module {
+    fn load_internal(
+        &self,
+        address: Expression,
+        offset: u32,
+        alignment: u32,
+        byte_count: u32,
+        type_: by::BinaryenType,
+        memory_name: &CStr,
+        signed: bool,
+    ) -> Expression {
+        Expression(unsafe {
+            by::BinaryenLoad(
+                self.by_module,
+                byte_count,
+                signed,
+                offset,
+                alignment,
+                type_,
+                address.0,
+                memory_name.as_ptr(),
+            )
+        })
+    }
+
+    pub fn load(
+        &self,
+        variant: LoadVariant,
+        address: Expression,
+        offset: u32,
+        alignment: u32,
+        memory_name: &CStr,
+    ) -> Expression {
+        self.load_internal(
+            address,
+            offset,
+            alignment,
+            variant.byte_count(),
+            variant.type_(self),
+            memory_name,
+            variant.signed(),
+        )
+    }
+
+    fn store_internal(
+        &self,
+        value: Expression,
+        address: Expression,
+        offset: u32,
+        alignment: u32,
+        byte_count: u32,
+        type_: by::BinaryenType,
+        memory_name: &CStr,
+    ) -> Expression {
+        Expression(unsafe {
+            by::BinaryenStore(
+                self.by_module,
+                byte_count,
+                offset,
+                alignment,
+                address.0,
+                value.0,
+                type_,
+                memory_name.as_ptr(),
+            )
+        })
+    }
+
+    pub fn store(
+        &self,
+        variant: StoreVariant,
+        value: Expression,
+        address: Expression,
+        offset: u32,
+        alignment: u32,
+        memory_name: &CStr,
+    ) -> Expression {
+        self.store_internal(
+            value,
+            address,
+            offset,
+            alignment,
+            variant.byte_count(),
+            variant.type_(self),
+            memory_name,
+        )
     }
 }
 
@@ -326,7 +523,7 @@ impl ToBinaryenLiteral for u64 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct Expression(by::BinaryenExpressionRef);
 
@@ -336,20 +533,15 @@ pub struct Relooper {
 }
 
 impl Relooper {
-    pub fn add_block(&mut self, code: by::BinaryenExpressionRef) -> RelooperBlock {
+    pub fn add_block(&mut self, code: Expression) -> RelooperBlock {
         RelooperBlock {
-            by_block: unsafe { by::RelooperAddBlock(self.by_relooper, code) },
+            by_block: unsafe { by::RelooperAddBlock(self.by_relooper, code.0) },
         }
     }
 
-    pub fn branch(
-        &self,
-        from: &RelooperBlock,
-        to: &RelooperBlock,
-        condition: Option<by::BinaryenExpressionRef>,
-    ) {
+    pub fn branch(&self, from: &RelooperBlock, to: &RelooperBlock, condition: Option<Expression>) {
         let condition_ptr = match condition {
-            Some(cond) => cond,
+            Some(cond) => cond.0,
             None => std::ptr::null_mut(),
         };
 
@@ -363,8 +555,8 @@ impl Relooper {
         }
     }
 
-    pub fn finish(self, entry: &RelooperBlock) -> by::BinaryenExpressionRef {
-        unsafe { by::RelooperRenderAndDispose(self.by_relooper, entry.by_block, 0) }
+    pub fn finish(self, entry: &RelooperBlock) -> Expression {
+        Expression(unsafe { by::RelooperRenderAndDispose(self.by_relooper, entry.by_block, 0) })
     }
 }
 
