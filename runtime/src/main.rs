@@ -9,29 +9,30 @@ fn main() -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
 
     // Syscalls: https://arm64.syscall.sh/
-    linker.func_wrap("env", "syscall_handler", |mut caller: Caller<'_, ()>, param: i32, x8: i64, x0: i64, x1: i64, x2: i64, x3: i64, x4: i64, x5: i64| -> i64 {
+    linker.func_wrap("ref", "supervisor_call", |mut caller: Caller<'_, ()>, param: i32, x8: i64, x0: i64, x1: i64, x2: i64, x3: i64, x4: i64, x5: i64| -> wasmtime::Result<(i64, i64)> {
         match x8 {
             0x40 => {
                 let fd = x0;
                 let ptr = x1 as u32;
                 let len = x2 as u32;
 
-                let memory = caller.get_export("mem").unwrap().into_memory().unwrap();
+                let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
 
                 let data = memory.data(&caller);
-                let slice = &data[ptr as usize..(ptr + len) as usize];
+                let slice = &data[(ptr as usize)..((ptr + len) as usize)];
 
                 eprintln!("Writing to fd {}: {:?}", fd, std::str::from_utf8(slice).unwrap());
             },
             0x5d => {
                 eprintln!("Exit called with code: {}", x0);
+                return Err(wasmtime::Trap::Interrupt.into());
             },
             _ => {
                 eprint!("syscall_handler called with param: {}, x8: {}, x0: {}, x1: {}, x2: {}, x3: {}, x4: {}, x5: {}\n", param, x8, x0, x1, x2, x3, x4, x5);
             }
         }
 
-        0
+        Ok((0, 0))
     })?;
 
     let mut store: Store<_> = Store::new(&engine, ());
@@ -43,7 +44,19 @@ fn main() -> wasmtime::Result<()> {
     let hello = instance.get_typed_func::<(), ()>(&mut store, "_entry")?;
 
     // And finally we can call the wasm!
-    hello.call(&mut store, ())?;
+    let result = hello.call(&mut store, ());
+
+    match result {
+        Ok(()) => {
+            eprintln!("-> WASM returned");
+        },
+        Err(e) if e.downcast_ref::<wasmtime::Trap>() == Some(&wasmtime::Trap::Interrupt) => {
+            eprintln!("-> WASM execution interrupted (exit called)");
+        },
+        Err(e) => {
+            return Err(e);
+        }
+    }
 
     Ok(())
 }
