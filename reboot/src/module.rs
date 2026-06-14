@@ -20,7 +20,8 @@ impl Module {
                 module,
                 by::BinaryenModuleGetFeatures(module)
                     | by::BinaryenFeatureMemory64()
-                    | by::BinaryenFeatureMultiMemory(),
+                    | by::BinaryenFeatureMultiMemory()
+                    | by::BinaryenFeatureMultivalue(),
             );
         }
 
@@ -74,7 +75,7 @@ impl Module {
         unsafe { by::BinaryenInt64() }
     }
 
-    pub fn const_<T: ToBinaryenLiteral>(&mut self, value: T) -> Expression {
+    pub fn const_<T: ToBinaryenLiteral>(&self, value: T) -> Expression {
         Expression(unsafe { by::BinaryenConst(self.by_module, value.to_literal()) })
     }
 
@@ -90,6 +91,18 @@ impl Module {
 }
 
 impl Module {
+    pub fn binary(&self, operand1: Expression, operand2: Expression, op: BinaryOp) -> Expression {
+        Expression(unsafe { by::BinaryenBinary(self.by_module, op.to_binaryen_op(), operand1.0, operand2.0) })
+    }
+
+    pub fn drop(&mut self, expr: Expression) -> Expression {
+        Expression(unsafe { by::BinaryenDrop(self.by_module, expr.0) })
+    }
+
+    pub fn unary(&self, operand: Expression, op: UnaryOp) -> Expression {
+        Expression(unsafe { by::BinaryenUnary(self.by_module, op.to_binaryen_op(), operand.0) })
+    }
+
     pub fn block(
         &self,
         type_: by::BinaryenType,
@@ -129,6 +142,18 @@ impl Module {
         }
     }
 
+    pub fn local_get(&self, index: u32, type_: by::BinaryenType) -> Expression {
+        Expression(unsafe { by::BinaryenLocalGet(self.by_module, index, type_) })
+    }
+
+    pub fn local_set(&self, index: u32, value: Expression) -> Expression {
+        Expression(unsafe { by::BinaryenLocalSet(self.by_module, index, value.0) })
+    }
+
+    pub fn unreachable(&self) -> Expression {
+        Expression(unsafe { by::BinaryenUnreachable(self.by_module) })
+    }
+
     pub fn tuple(&self, types: &[by::BinaryenType]) -> by::BinaryenType {
         unsafe {
             by::BinaryenTypeCreate(
@@ -147,6 +172,116 @@ impl Drop for Module {
     fn drop(&mut self) {
         unsafe {
             by::BinaryenModuleDispose(self.by_module);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnaryOp {
+    WrapInt64,
+    ExtendSInt32,
+    ExtendUInt32,
+
+    Abs,
+    Ceil,
+    Floor,
+    Trunc,
+    Nearest,
+    Sqrt,
+    EqZInt32,
+    ClzInt32,
+    CtzInt32,
+    PopcntInt32,
+    EqZInt64,
+    ClzInt64,
+    CtzInt64,
+    PopcntInt64,
+}
+
+impl UnaryOp {
+    pub fn to_binaryen_op(&self) -> by::BinaryenOp {
+        use UnaryOp::*;
+
+        match self {
+            WrapInt64 => unsafe { by::BinaryenWrapInt64() },
+            ExtendSInt32 => unsafe { by::BinaryenExtendSInt32() },
+            ExtendUInt32 => unsafe { by::BinaryenExtendUInt32() },
+
+            Abs => unsafe { by::BinaryenAbsFloat64() },
+            Ceil => unsafe { by::BinaryenCeilFloat64() },
+            Floor => unsafe { by::BinaryenFloorFloat64() },
+            Trunc => unsafe { by::BinaryenTruncFloat64() },
+            Nearest => unsafe { by::BinaryenNearestFloat64() },
+            Sqrt => unsafe { by::BinaryenSqrtFloat64() },
+            EqZInt32 => unsafe { by::BinaryenEqZInt32() },
+            ClzInt32 => unsafe { by::BinaryenClzInt32() },
+            CtzInt32 => unsafe { by::BinaryenCtzInt32() },
+            PopcntInt32 => unsafe { by::BinaryenPopcntInt32() },
+            EqZInt64 => unsafe { by::BinaryenEqZInt64() },
+            ClzInt64 => unsafe { by::BinaryenClzInt64() },
+            CtzInt64 => unsafe { by::BinaryenCtzInt64() },
+            PopcntInt64 => unsafe { by::BinaryenPopcntInt64() },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BinaryOp {
+    Add,
+    Mul,
+    Sub,
+    DivS,
+    DivU,
+    RemS,
+    RemU,
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    RotL,
+    RotR,
+    Eq,
+    Ne,
+    LtS,
+    LtU,
+    LeS,
+    LeU,
+    GtS,
+    GtU,
+    GeS,
+    GeU,
+}
+
+impl BinaryOp {
+    pub fn to_binaryen_op(&self) -> by::BinaryenOp {
+        use BinaryOp::*;
+
+        match self {
+            Add => unsafe { by::BinaryenAddInt64() },
+            Mul => unsafe { by::BinaryenMulInt64() },
+            Sub => unsafe { by::BinaryenSubInt64() },
+            DivS => unsafe { by::BinaryenDivSInt64() },
+            DivU => unsafe { by::BinaryenDivUInt64() },
+            RemS => unsafe { by::BinaryenRemSInt64() },
+            RemU => unsafe { by::BinaryenRemUInt64() },
+            And => unsafe { by::BinaryenAndInt64() },
+            Or => unsafe { by::BinaryenOrInt64() },
+            Xor => unsafe { by::BinaryenXorInt64() },
+            Shl => unsafe { by::BinaryenShlInt64() },
+            Shr => unsafe { by::BinaryenShrUInt64() },
+            RotL => unsafe { by::BinaryenRotLInt64() },
+            RotR => unsafe { by::BinaryenRotRInt64() },
+            Eq => unsafe { by::BinaryenEqInt64() },
+            Ne => unsafe { by::BinaryenNeInt64() },
+            LtS => unsafe { by::BinaryenLtSInt64() },
+            LtU => unsafe { by::BinaryenLtUInt64() },
+            LeS => unsafe { by::BinaryenLeSInt64() },
+            LeU => unsafe { by::BinaryenLeUInt64() },
+            GtS => unsafe { by::BinaryenGtSInt64() },
+            GtU => unsafe { by::BinaryenGtUInt64() },
+            GeS => unsafe { by::BinaryenGeSInt64() },
+            GeU => unsafe { by::BinaryenGeUInt64() },
         }
     }
 }
