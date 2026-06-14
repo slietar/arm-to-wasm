@@ -376,6 +376,12 @@ pub enum Instruction {
         operand1: Register,
         variant: SizeVariant,
     },
+    SubsImmediate {
+        destination: Register,
+        operand: u64,
+        source: Register,
+        variant: SizeVariant,
+    },
     SupervisorCall {
         argument: u16,
     },
@@ -685,6 +691,22 @@ impl Instruction {
         ) {
             return Self::SubImmediate {
                 destination: bytes.register(0, false),
+                operand: (bytes.immediate_unsigned(10, 12) as u64)
+                    << (if bytes.bool(22) { 12 } else { 0 }),
+                source: bytes.register(5, false),
+                variant: bytes.variant(),
+            };
+        }
+
+        // SUBS (immediate)
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/SUBS--immediate---Subtract-immediate-value--setting-flags-?lang=en
+        if equal_masked(
+            value,
+            0b0111_1111_1000_0000_0000_0000_0000_0000,
+            0b0111_0001_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::SubsImmediate {
+                destination: bytes.register(0, true),
                 operand: (bytes.immediate_unsigned(10, 12) as u64)
                     << (if bytes.bool(22) { 12 } else { 0 }),
                 source: bytes.register(5, false),

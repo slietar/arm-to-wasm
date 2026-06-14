@@ -113,7 +113,7 @@ impl InstructionInfo for Instruction {
                     variant: SizeVariant::Reg64,
                 },
             ],
-            SubImmediate { source, .. } => vec![SizedRegister {
+            SubImmediate { source, .. } | SubsImmediate { source, .. } => vec![SizedRegister {
                 register: *source,
                 variant: SizeVariant::Reg64,
             }],
@@ -213,6 +213,11 @@ impl InstructionInfo for Instruction {
             StorePairOfRegisters { .. } => Vec::new(),
             StoreRegisterRegister { .. } => Vec::new(),
             SubImmediate {
+                destination,
+                variant,
+                ..
+            }
+            | SubsImmediate {
                 destination,
                 variant,
                 ..
