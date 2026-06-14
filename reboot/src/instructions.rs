@@ -321,6 +321,10 @@ pub enum Instruction {
         destination: Register,
         value: i64,
     },
+    FormPCRelativeAddressToPage {
+        destination: Register,
+        value: i64,
+    },
     LoadRegisterImmediate {
         address: Address,
         destination: Register,
@@ -870,6 +874,22 @@ impl Instruction {
                 destination: bytes.register(0, true),
                 value: sign_extend((get_bits(value, 5, 19) << 2) | get_bits(value, 29, 2), 21)
                     as i64,
+            };
+        }
+
+        // ADRP
+        // Form PC-relative address to 4KB page
+
+        if equal_masked(
+            value,
+            0b1001_1111_0000_0000_0000_0000_0000_0000,
+            0b1001_0000_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::FormPCRelativeAddressToPage {
+                destination: bytes.register(0, true),
+                value: (sign_extend((get_bits(value, 5, 19) << 2) | get_bits(value, 29, 2), 21)
+                    as i64)
+                    * (1 << 12),
             };
         }
 
