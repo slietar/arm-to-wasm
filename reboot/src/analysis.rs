@@ -132,6 +132,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
         .filter(|seg| (seg.p_type == elf::abi::PT_LOAD) && ((seg.p_flags & elf::abi::PF_X) != 0))
         .map(|seg| ExecutableSegment {
             address: seg.p_vaddr,
+            // TODO: Move to section
             instructions: Instruction::decode_bytes(
                 &elf_bytes[(seg.p_offset as usize)..(seg.p_offset + seg.p_filesz) as usize],
             ),
@@ -151,11 +152,11 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             })
             .unwrap();
 
-        eprintln!(
-            "\nRoutine at {:#x} ({})",
-            routine_address,
-            routine_name.as_deref().unwrap_or("<unknown>"),
-        );
+        // eprintln!(
+        //     "\nRoutine at {:#x} ({})",
+        //     routine_address,
+        //     routine_name.as_deref().unwrap_or("<unknown>"),
+        // );
 
         let segment_data = &elf_bytes
             [(segment.source_offset as usize)..((segment.source_offset + segment.size) as usize)];
@@ -514,9 +515,9 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             })
             .collect::<Vec<_>>();
 
-        eprintln!("Block start addresses: {:#x?}", block_start_addresses);
-        eprintln!("Block ends: {:#x?}", block_ends);
-        eprintln!("Blocks: {:#x?}", blocks);
+        // eprintln!("Block start addresses: {:#x?}", block_start_addresses);
+        // eprintln!("Block ends: {:#x?}", block_ends);
+        // eprintln!("Blocks: {:#x?}", blocks);
 
         // eprintln!("Stack entry size: {:?}", stack_entry_size);
 
@@ -577,7 +578,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             }
         }
 
-        eprintln!("Exit walker: {:#?}", Walker::merge_all(&exit_walkers));
+        // eprintln!("Exit walker: {:#?}", Walker::merge_all(&exit_walkers));
 
         // Variable analysis
 

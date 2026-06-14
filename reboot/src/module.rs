@@ -44,11 +44,6 @@ impl Module {
     }
 
     pub fn save(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
-        // let mut output = vec![0u8; 10_000_000];
-        // let written = unsafe {
-        //     by::BinaryenModuleWrite(self.by_module, output.as_mut_ptr() as *mut i8, output.len())
-        // };
-
         let result =
             unsafe { by::BinaryenModuleAllocateAndWrite(self.by_module, std::ptr::null()) };
 
@@ -602,6 +597,12 @@ impl ToBinaryenLiteral for u64 {
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct Expression(by::BinaryenExpressionRef);
+
+impl Expression {
+    pub unsafe fn extract(&self) -> by::BinaryenExpressionRef {
+        self.0
+    }
+}
 
 #[derive(Debug)]
 pub struct Relooper {

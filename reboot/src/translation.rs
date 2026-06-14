@@ -189,6 +189,11 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let elf_file = ElfBytes::<elf::endian::AnyEndian>::minimal_parse(elf_bytes)?;
     let memory_info = set_up_memory("memory", elf_bytes, elf_file, &module);
 
+    // eprintln!(
+    //     "{:#?}",
+    //     memory_info
+    // );
+
     for (routine_index, routine) in analysis.routines.iter().enumerate() {
         let routine_name = &function_names[routine_index];
 
@@ -220,6 +225,33 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                     Instruction::Nop => {
                         block_exprs.push(module.nop());
                     }
+                    Instruction::AddImmediate {
+                        destination,
+                        operand,
+                        source,
+                        variant,
+                    } => {
+                        let read_expr = get_reg_expr(&module, *source, *variant, param_count);
+                        let write_expr = match variant {
+                            SizeVariant::Reg32 => module.unary(
+                                module.binary(
+                                    read_expr,
+                                    module.const_(*operand as i32),
+                                    BinaryOp::Add,
+                                ),
+                                UnaryOp::ExtendUInt32,
+                            ),
+                            SizeVariant::Reg64 => {
+                                module.binary(read_expr, module.const_(*operand), BinaryOp::Add)
+                            }
+                        };
+
+                        block_exprs.push(module.local_set(
+                            param_count + get_reg_local_index(*destination),
+                            write_expr,
+                        ));
+                    }
+                    // TODO: Implement Reg32
                     Instruction::SubImmediate {
                         destination,
                         operand,
@@ -247,7 +279,12 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             },
                             get_reg_expr(&module, *value, *variant, param_count),
                             module.binary(
-                                get_reg_expr(&module, address.base, SizeVariant::Reg64, param_count),
+                                get_reg_expr(
+                                    &module,
+                                    address.base,
+                                    SizeVariant::Reg64,
+                                    param_count,
+                                ),
                                 module.const_(address.mode.access_offset() as i64),
                                 BinaryOp::Add,
                             ),
@@ -352,7 +389,28 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             ));
                         }
                     }
-                    _ => {}
+                    Instruction::FormPCRelativeAddress { destination, value } => {
+                        let address = ((current_address as i64) + *value) as u64;
+
+                        block_exprs.push(module.local_set(
+                            param_count + get_reg_local_index(*destination),
+                            module.const_(address),
+                        ));
+                    }
+                    Instruction::FormPCRelativeAddressToPage { destination, value } => {
+                        let address = ((current_address & !0xfff) as i64 + *value) as u64;
+
+                        block_exprs.push(module.local_set(
+                            param_count + get_reg_local_index(*destination),
+                            module.const_(address),
+                        ));
+                    }
+                    _ => {
+                        eprintln!(
+                            "Unimplemented instruction at {:#x}: {:?}",
+                            current_address, instruction
+                        );
+                    }
                 }
             }
 
@@ -428,13 +486,11 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
             module.block(
                 module.none(),
                 &[
-                    module.drop(
-                        module.call(
-                            &function_names[entry_routine_index],
-                            &arg_exprs,
-                            module.tuple_type(&param_types),
-                        ),
-                    ),
+                    module.drop(module.call(
+                        &function_names[entry_routine_index],
+                        &arg_exprs,
+                        module.tuple_type(&param_types),
+                    )),
                     module.unreachable(),
                 ],
             ),
@@ -456,7 +512,6 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 struct MappedSegment<'a> {
     address: u64,
     data: &'a [u8],
-    memory_offset: u64,
     size: u64,
     writable: bool,
 }
@@ -474,36 +529,29 @@ pub fn set_up_memory(
     elf_file: ElfBytes<elf::endian::AnyEndian>,
     module: &Module,
 ) -> MemoryInfo {
-    let mut current_offset = 0;
     let mut mapped_segments = Vec::new();
 
     for segment in elf_file.segments().unwrap() {
         // eprintln!("Segment: {:?}", segment);
 
         if segment.p_type == elf::abi::PT_LOAD {
-            // let is_executable = (segment.p_flags & elf::abi::PF_X) != 0;
-            // if is_executable {
-            //     eprintln!("Found executable segment at 0x{:x} with {} bytes", segment.p_offset, segment.p_filesz);
-            // }
-
-            // eprintln!("{} {}", segment.p_filesz, file_data[(segment.p_offset as usize)..(segment.p_offset + segment.p_filesz) as usize].len());
-
             mapped_segments.push(MappedSegment {
                 address: segment.p_vaddr,
                 data: &elf_bytes
                     [(segment.p_offset as usize)..(segment.p_offset + segment.p_filesz) as usize],
-                memory_offset: current_offset,
                 size: segment.p_filesz,
                 writable: (segment.p_flags & elf::abi::PF_W) != 0,
             });
-
-            // eprintln!("{:?}", mapped_segments.last().unwrap().data);
-
-            current_offset += segment.p_filesz;
         }
     }
 
-    let total_mapped_size = current_offset;
+    let total_mapped_size = mapped_segments
+        .iter()
+        .map(|seg| seg.address + seg.size)
+        .max()
+        .unwrap_or(0)
+        .div_ceil(PAGE_SIZE as u64)
+        * PAGE_SIZE as u64;
 
     let segment_names = mapped_segments
         .iter()
@@ -522,12 +570,7 @@ pub fn set_up_memory(
 
     let mut segment_offsets = mapped_segments
         .iter()
-        .map(|seg| unsafe {
-            by::BinaryenConst(
-                module.by_module,
-                by::BinaryenLiteralInt64(seg.memory_offset as i64),
-            )
-        })
+        .map(|seg| unsafe { module.const_(seg.address).extract() })
         .collect::<Vec<_>>();
 
     let mut segment_sizes = mapped_segments
