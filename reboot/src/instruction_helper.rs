@@ -1,4 +1,4 @@
-use crate::instructions::{Instruction, Register};
+use crate::instructions::{Address, AddressingMode, Instruction, Register};
 
 pub trait InstructionInfo {
     fn registers_read(&self) -> Vec<Register>;
@@ -61,6 +61,17 @@ impl InstructionInfo for Instruction {
             MoveWideWithZero { destination, .. } => vec![*destination],
             Nop => vec![],
             Return { .. } => vec![],
+            StoreRegisterImmediate {
+                address:
+                    Address {
+                        base,
+                        mode:
+                            AddressingMode::PreIndexWithWriteback { .. }
+                            | AddressingMode::PostIndexWithWriteback { .. },
+                    },
+                ..
+            } => vec![*base],
+            // TODO: Add other writeback cases
             StoreRegisterImmediate { .. } => vec![],
             StoreRegisterHalfwordImmediate { .. } => vec![],
             StorePairOfRegisters { .. } => vec![],

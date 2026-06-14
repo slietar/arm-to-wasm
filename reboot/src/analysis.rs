@@ -34,18 +34,13 @@ struct ExecutableSegment {
 
 #[derive(Debug)]
 struct Block {
+    fallthrough_block_index: Option<usize>,
     instruction_count: u64,
-    jump: Option<BlockJump>,
+    jump_block_index: Option<usize>,
     start_address: u64,
 }
 
-#[derive(Debug)]
-struct BlockJump {
-    conditional: bool,
-    target_address: u64,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Jump {
     conditional: bool,
     source_address: u64,
@@ -409,14 +404,16 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             }
         }
 
+        // Block analysis
+
         // eprintln!("Block start addresses: {:#x?}", jump_source_addresses);
         // eprintln!("Jump destination addresses: {:#x?}", block_start_addresses);
 
         // let last_address = *handled_addresses.iter().max().unwrap();
 
-        eprintln!("Jumps: {:#x?}", jumps);
+        // eprintln!("Jumps: {:#x?}", jumps);
 
-        let block_start_addresses = jumps
+        let mut block_start_addresses = jumps
             .iter()
             .map(|jump| jump.target_address)
             .chain(std::iter::once(routine_address))
@@ -426,25 +423,52 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                     .filter(|jump| jump.conditional)
                     .map(|jump| jump.source_address + INSTRUCTION_SIZE),
             )
-            .collect::<HashSet<_>>();
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        block_start_addresses.sort();
+
+        // Problem: RET is not detected
+
+        #[derive(Debug, Clone)]
+        enum BlockEndKind {
+            Exit,
+            Fallthrough,
+            Jump(Jump),
+        }
 
         let mut block_ends = jumps
             .iter()
-            .flat_map(|jump| [
-                (jump.source_address + INSTRUCTION_SIZE, Some(jump)),
-                (jump.target_address, None),
-            ])
+            .flat_map(|jump| {
+                [
+                    (
+                        jump.source_address + INSTRUCTION_SIZE,
+                        BlockEndKind::Jump(jump.clone()),
+                    ),
+                    (jump.target_address, BlockEndKind::Fallthrough),
+                ]
+            })
             .collect::<Vec<_>>();
 
-        block_ends.push((routine_max_address, None));
+        block_ends.push((routine_max_address, BlockEndKind::Exit));
 
-        block_ends.sort_by_key(|(address, jump)| (*address, jump.is_none()));
+        block_ends.sort_by_key(|(address, jump)| {
+            (
+                *address,
+                match jump {
+                    BlockEndKind::Exit => 2,
+                    BlockEndKind::Fallthrough => 1,
+                    BlockEndKind::Jump(_) => 0,
+                },
+            )
+        });
         block_ends.dedup_by_key(|(address, _)| *address);
 
         let mut blocks = block_start_addresses
             .iter()
             .map(|&addr| {
-                let (end_addr, end_jump) = block_ends
+                let (end_addr, end_kind) = block_ends
                     .iter()
                     .find(|(end_addr, _)| *end_addr > addr)
                     .unwrap();
@@ -452,15 +476,33 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                 Block {
                     start_address: addr,
                     instruction_count: ((end_addr - addr) / INSTRUCTION_SIZE),
-                    jump: end_jump.map(|jump| BlockJump {
-                        conditional: jump.conditional,
-                        target_address: jump.target_address,
-                    }),
+                    fallthrough_block_index: match end_kind {
+                        BlockEndKind::Fallthrough => Some(
+                            block_start_addresses
+                                .iter()
+                                .position(|&start_addr| start_addr == *end_addr)
+                                .unwrap(),
+                        ),
+                        BlockEndKind::Jump(jump) if jump.conditional => Some(
+                            block_start_addresses
+                                .iter()
+                                .position(|&start_addr| start_addr == *end_addr)
+                                .unwrap(),
+                        ),
+                        _ => None,
+                    },
+                    jump_block_index: match end_kind {
+                        BlockEndKind::Jump(jump) => Some(
+                            block_start_addresses
+                                .iter()
+                                .position(|&start_addr| start_addr == jump.target_address)
+                                .unwrap(),
+                        ),
+                        _ => None,
+                    },
                 }
             })
             .collect::<Vec<_>>();
-
-        blocks.sort_by_key(|block| block.start_address);
 
         eprintln!("Block start addresses: {:#x?}", block_start_addresses);
         eprintln!("Block ends: {:#x?}", block_ends);
@@ -476,25 +518,57 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
         //     eprintln!("Stack accesses: {:#?}", stack_accesses);
         // }
 
-        let instructions = Instruction::decode_bytes(&segment_data);
+        // Register read analysis
+
+        let segment_instructions = Instruction::decode_bytes(&segment_data);
 
         let walker = RegisterReadWalker::default();
-        // let stack = Vec::new();
 
-        // loop {
-        //     let block = &blocks[0];
+        let mut queue = vec![(0, walker)];
+        let mut exit_walkers = Vec::new();
+        let mut cache = HashSet::new();
 
-        //     let block_instructions = &instructions[(((block.start_address - segment.address)
-        //         / INSTRUCTION_SIZE) as usize)
-        //         ..(((block.start_address - segment.address) / INSTRUCTION_SIZE
-        //             + block.instruction_count) as usize)];
+        while let Some(key) = queue.pop() {
+            if cache.contains(&key) {
+                exit_walkers.push(key.1);
+                continue;
+            }
 
-        //     for instruction in block_instructions {
-        //         walker.walk(instruction);
-        //     }
+            cache.insert(key.clone());
 
-        //     // if block.
-        // }
+            let (block_index, mut walker) = key;
+            let block = &blocks[block_index];
+
+            let block_instructions =
+                &segment_instructions[(((block.start_address - segment.address) / INSTRUCTION_SIZE)
+                    as usize)
+                    ..(((block.start_address - segment.address) / INSTRUCTION_SIZE
+                        + block.instruction_count) as usize)];
+
+            for instruction in block_instructions {
+                walker.walk(instruction);
+            }
+
+            let mut inserted = false;
+
+            if let Some(fallthrough_block_index) = block.fallthrough_block_index {
+                queue.push((fallthrough_block_index, walker.clone()));
+                inserted = true;
+            }
+
+            if let Some(jump_block_index) = block.jump_block_index {
+                queue.push((jump_block_index, walker.clone()));
+                inserted = true;
+            }
+
+            if !inserted {
+                exit_walkers.push(walker);
+            }
+        }
+
+        eprintln!("Exit walkers: {:#?}", exit_walkers);
+
+        // Variable analysis
 
         let mut variables = HashMap::<i32, SizeVariant>::new();
 
@@ -544,27 +618,27 @@ pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RegisterReadWalker {
     registers_read: HashSet<Register>,
     registers_written: HashSet<Register>,
 }
 
 impl RegisterReadWalker {
-    fn merge(&mut self, other: &RegisterReadWalker) {
-        RegisterReadWalker {
-            registers_read: self
-                .registers_read
-                .union(&other.registers_read)
-                .copied()
-                .collect(),
-            registers_written: self
-                .registers_written
-                .intersection(&other.registers_written)
-                .copied()
-                .collect(),
-        };
-    }
+    // fn merge(&mut self, other: &RegisterReadWalker) {
+    //     RegisterReadWalker {
+    //         registers_read: self
+    //             .registers_read
+    //             .union(&other.registers_read)
+    //             .copied()
+    //             .collect(),
+    //         registers_written: self
+    //             .registers_written
+    //             .intersection(&other.registers_written)
+    //             .copied()
+    //             .collect(),
+    //     };
+    // }
 
     fn walk(&mut self, instruction: &Instruction) {
         self.registers_read.extend(
@@ -576,4 +650,23 @@ impl RegisterReadWalker {
         self.registers_written
             .extend(instruction.registers_written());
     }
+}
+
+impl Hash for RegisterReadWalker {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        hash_set(state, &self.registers_read);
+        hash_set(state, &self.registers_written);
+    }
+}
+
+fn hash_set<H: std::hash::Hasher, T: Hash + Eq>(state: &mut H, set: &HashSet<T>) {
+    let build_hasher = std::hash::RandomState::default();
+
+    let hash = set
+        .iter()
+        .map(|t| std::hash::BuildHasher::hash_one(&build_hasher, t))
+        .fold(0, u64::wrapping_add);
+
+    state.write_usize(set.len());
+    state.write_u64(hash);
 }
