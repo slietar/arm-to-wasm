@@ -29,16 +29,18 @@ pub struct Analysis {
 #[derive(Debug)]
 struct ExecutableSegment {
     pub address: u64,
+    pub instructions: Vec<Instruction>,
     pub source_offset: u64,
     pub size: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    fallthrough_block_index: Option<usize>,
-    instruction_count: u64,
-    jump_block_index: Option<usize>,
-    start_address: u64,
+    pub fallthrough_block_index: Option<usize>,
+    pub instruction_count: u64,
+    pub instructions: Vec<Instruction>,
+    pub jump_block_index: Option<usize>,
+    pub start_address: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +132,9 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
         .filter(|seg| (seg.p_type == elf::abi::PT_LOAD) && ((seg.p_flags & elf::abi::PF_X) != 0))
         .map(|seg| ExecutableSegment {
             address: seg.p_vaddr,
+            instructions: Instruction::decode_bytes(
+                &elf_bytes[(seg.p_offset as usize)..(seg.p_offset + seg.p_filesz) as usize],
+            ),
             source_offset: seg.p_offset,
             size: seg.p_filesz,
         })
@@ -191,11 +196,10 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             // eprintln!("Handling address {:#x}", current_address);
 
             // let instruction_index = (current_address - segment.address) / INSTRUCTION_SIZE;
-            let instructions = Instruction::decode_bytes(
-                &segment_data[((branch_address - segment.address) as usize)..],
-            );
+            let branch_instructions = &segment.instructions
+                [(((branch_address - segment.address) / INSTRUCTION_SIZE) as usize)..];
 
-            for (instruction_index, instruction) in instructions.iter().enumerate() {
+            for (instruction_index, instruction) in branch_instructions.iter().enumerate() {
                 let current_address =
                     branch_address + (instruction_index as u64) * INSTRUCTION_SIZE;
 
@@ -477,6 +481,11 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                 Block {
                     start_address: addr,
                     instruction_count: ((end_addr - addr) / INSTRUCTION_SIZE),
+                    instructions: segment.instructions[(((addr - segment.address)
+                        / INSTRUCTION_SIZE)
+                        as usize)
+                        ..(((end_addr - segment.address) / INSTRUCTION_SIZE) as usize)]
+                        .to_vec(),
                     fallthrough_block_index: match end_kind {
                         BlockEndKind::Fallthrough => Some(
                             block_start_addresses

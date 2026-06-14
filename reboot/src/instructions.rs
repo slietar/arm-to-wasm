@@ -126,6 +126,14 @@ impl AddressingMode {
             AddressingMode::PreIndexWithWriteback { offset } => *offset,
         }
     }
+
+    pub fn writeback_offset(&self) -> Option<i32> {
+        match self {
+            AddressingMode::PostIndexWithWriteback { offset } => Some(*offset),
+            AddressingMode::PreIndex { .. } => None,
+            AddressingMode::PreIndexWithWriteback { offset } => Some(*offset),
+        }
+    }
 }
 
 struct InstructionBytes(u32);
@@ -283,7 +291,7 @@ impl Condition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
     AddImmediate {
         destination: Register,

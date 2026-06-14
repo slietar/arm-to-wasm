@@ -5,8 +5,8 @@ use elf::ElfBytes;
 
 use crate::{
     constants::PAGE_SIZE,
-    instructions::{Register, SizeVariant},
-    module::{BinaryOp, Expression, Module, UnaryOp},
+    instructions::{AddressingMode, Condition, Instruction, Register, SizeVariant},
+    module::{BinaryOp, Expression, Module, StoreVariant, UnaryOp},
 };
 
 pub const GENERAL_PURPOSE_REGISTER_COUNT: u32 = 31;
@@ -14,7 +14,11 @@ pub const PARAMETER_REGISTER_COUNT: u32 = 8;
 
 pub const SP_LOCAL_INDEX: u32 = 0;
 pub const CARRY_FLAG_LOCAL_INDEX: u32 = 1;
-pub const FIRST_GP_REGISTER_LOCAL_INDEX: u32 = 2;
+pub const NEGATIVE_FLAG_LOCAL_INDEX: u32 = 2;
+pub const ZERO_FLAG_LOCAL_INDEX: u32 = 3;
+pub const OVERFLOW_FLAG_LOCAL_INDEX: u32 = 4;
+
+pub const FIRST_GP_REGISTER_LOCAL_INDEX: u32 = 5;
 
 fn get_reg_local_index(register: Register) -> u32 {
     use Register::*;
@@ -62,7 +66,7 @@ fn get_reg_expr(
     module: &Module,
     register: Register,
     variant: SizeVariant,
-    param_count: usize,
+    param_count: u32,
 ) -> Expression {
     match register {
         Register::XZR => match variant {
@@ -71,7 +75,7 @@ fn get_reg_expr(
         },
         _ => {
             let local_index = get_reg_local_index(register);
-            let expr = module.local_get((param_count as u32) + local_index, module.i64());
+            let expr = module.local_get(param_count + local_index, module.i64());
 
             match variant {
                 SizeVariant::Reg32 => module.unary(
@@ -113,7 +117,10 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         // SP
         local_types.push(module.i64());
 
-        // Carry flag
+        // Flags
+        local_types.push(module.i32());
+        local_types.push(module.i32());
+        local_types.push(module.i32());
         local_types.push(module.i32());
 
         // GP registers
@@ -121,6 +128,8 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
         local_types
     };
+    let elf_file = ElfBytes::<elf::endian::AnyEndian>::minimal_parse(elf_bytes)?;
+    let memory_info = set_up_memory("memory", elf_bytes, elf_file, &module);
 
     let param_registers = [
         Register::X0,
@@ -131,7 +140,10 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         Register::X5,
         Register::X6,
         Register::X7,
+        Register::SP,
     ];
+
+    let param_count = param_registers.len() as u32;
 
     let param_types = param_registers
         .iter()
@@ -143,31 +155,145 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     for (routine_index, routine) in analysis.routines.iter().enumerate() {
         let routine_name = &routine_names[routine_index];
 
-        // let relooper = module.relooper();
+        if routine.name.as_deref().unwrap() != "_start" {
+            continue;
+        }
 
-        let mut exprs = Vec::new();
+        let mut relooper = module.relooper();
+
+        let mut routine_exprs = Vec::new();
 
         for (param_index, param_register) in param_registers.iter().enumerate() {
-            exprs.push(module.local_set(
-                (param_types.len() as u32) + get_reg_local_index(*param_register),
+            routine_exprs.push(module.local_set(
+                param_count + get_reg_local_index(*param_register),
                 module.local_get(param_index as u32, module.i64()),
             ));
         }
 
-        for block in &routine.blocks {
-            // relooper.add_block(&block_name, block_expr);
+        let mut relooper_blocks = Vec::new();
 
-            exprs.push(module.drop(get_reg_expr(
-                &module,
-                Register::X0,
-                SizeVariant::Reg32,
-                param_types.len(),
-            )));
+        for block in &routine.blocks {
+            let mut block_exprs = Vec::new();
+
+            for instruction in &block.instructions {
+                match instruction {
+                    Instruction::Nop => {
+                        block_exprs.push(module.nop());
+                    }
+                    Instruction::SubImmediate {
+                        destination,
+                        operand,
+                        source,
+                        variant,
+                    } => {
+                        block_exprs.push(module.local_set(
+                            param_count + get_reg_local_index(*destination),
+                            module.binary(
+                                get_reg_expr(&module, *source, *variant, param_count),
+                                module.const_(*operand),
+                                BinaryOp::Sub,
+                            ),
+                        ));
+                    }
+                    Instruction::StoreRegisterImmediate {
+                        address,
+                        value,
+                        variant,
+                    } => {
+                        block_exprs.push(module.store(
+                            match variant {
+                                SizeVariant::Reg32 => StoreVariant::I64L32,
+                                SizeVariant::Reg64 => StoreVariant::I64,
+                            },
+                            get_reg_expr(&module, *value, *variant, param_count),
+                            get_reg_expr(&module, address.base, SizeVariant::Reg64, param_count),
+                            (address.mode.access_offset()
+                                + (match address.base {
+                                    Register::SP => memory_info.stack_internal_address as i32,
+                                    _ => 0,
+                                })) as u32,
+                            8,
+                            &memory_info.name,
+                        ));
+
+                        if let Some(writeback_offset) = address.mode.writeback_offset() {
+                            block_exprs.push(module.local_set(
+                                param_count + get_reg_local_index(address.base),
+                                module.binary(
+                                    get_reg_expr(
+                                        &module,
+                                        address.base,
+                                        SizeVariant::Reg64,
+                                        param_count,
+                                    ),
+                                    module.const_(writeback_offset as i64),
+                                    BinaryOp::Add,
+                                ),
+                            ));
+                        }
+                    }
+                    Instruction::MoveWideWithZero {
+                        destination,
+                        value,
+                        variant,
+                    } => {
+                        block_exprs.push(module.local_set(
+                            param_count + get_reg_local_index(*destination),
+                            module.const_(*value),
+                        ));
+                    }
+                    // Instruction::Return { target } => {
+                    //     assert!(*target == Register::X30);
+
+                    //     block_exprs.push(module.return_(
+                    //         module.local_get(param_count + get_reg_local_index(*target), module.i64()),
+                    //     ));
+                    // }
+                    _ => {}
+                }
+            }
+
+            let by_block = module.block(module.none(), &block_exprs);
+            let relooper_block = relooper.add_block(by_block);
+
+            relooper_blocks.push(relooper_block);
         }
 
-        exprs.push(module.unreachable());
+        for (block, relooper_block) in routine.blocks.iter().zip(relooper_blocks.iter()) {
+            if let Some(fallthrough_block_index) = block.fallthrough_block_index {
+                relooper.branch(
+                    relooper_block,
+                    &relooper_blocks[fallthrough_block_index],
+                    None,
+                );
+            }
 
-        let func_block = module.block(module.none(), &exprs);
+            if let Some(jump_block_index) = block.jump_block_index {
+                let condition = match &block.instructions.last().unwrap() {
+                    Instruction::BranchConditionally { target, condition } => {
+                        Some(match condition {
+                            Condition::EQ => module.binary(
+                                module.local_get(param_count + ZERO_FLAG_LOCAL_INDEX, module.i32()),
+                                module.const_(1i32),
+                                BinaryOp::Eq,
+                            ),
+                            _ => todo!(),
+                        })
+                    }
+                    _ => None,
+                };
+
+                relooper.branch(
+                    relooper_block,
+                    &relooper_blocks[jump_block_index],
+                    condition,
+                );
+            }
+        }
+
+        routine_exprs.push(relooper.finish(&relooper_blocks[0]));
+
+        let func_block = module.block(module.none(), &routine_exprs);
         let func = module.function(
             routine_name,
             &param_types,
@@ -193,12 +319,19 @@ struct MappedSegment<'a> {
     writable: bool,
 }
 
-pub fn set_memory(
+#[derive(Debug)]
+pub struct MemoryInfo {
+    name: CString,
+    stack_internal_address: u64,
+    stack_size: u64,
+}
+
+pub fn set_up_memory(
     memory_name: &str,
     elf_bytes: &[u8],
     elf_file: ElfBytes<elf::endian::AnyEndian>,
     module: &Module,
-) {
+) -> MemoryInfo {
     let mut current_offset = 0;
     let mut mapped_segments = Vec::new();
 
@@ -265,14 +398,14 @@ pub fn set_memory(
     let stack_memory_page_count = 2;
     let stack_memory_internal_address = mapped_memory_size;
 
-    let mapped_memory_name = CString::new(memory_name).unwrap();
+    let memory_name = CString::new(memory_name).unwrap();
 
     unsafe {
         by::BinaryenSetMemory(
             module.by_module,
             (mapped_memory_page_count + stack_memory_page_count) as u32,
             i32::cast_unsigned(-1),
-            mapped_memory_name.as_ptr(),
+            memory_name.as_ptr(),
             segment_name_ptrs.as_mut_ptr() as *mut *const i8,
             segment_datas.as_mut_ptr() as *mut *const i8,
             segment_passives.as_mut_ptr(),
@@ -281,7 +414,13 @@ pub fn set_memory(
             mapped_segments.len() as u32,
             false,
             true,
-            mapped_memory_name.as_ptr(),
+            memory_name.as_ptr(),
         );
+    }
+
+    MemoryInfo {
+        name: memory_name,
+        stack_internal_address: stack_memory_internal_address,
+        stack_size: stack_memory_page_count * PAGE_SIZE,
     }
 }
