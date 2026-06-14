@@ -17,7 +17,8 @@ const INSTRUCTION_SIZE: u64 = 4;
 const PAGE_SIZE: u32 = 65_536;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = PathBuf::from("../example/target/aarch64-unknown-none/debug/example");
+    let path = PathBuf::from("../example/example");
+    // let path = PathBuf::from("../example/target/aarch64-unknown-none/debug/example");
     // let path = PathBuf::from("/Users/simon/Developer/arm-to-wasm/runtime/target/debug/runtime");
     let elf_bytes = std::fs::read(path).expect("Could not read file.");
 

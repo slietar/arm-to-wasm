@@ -4,7 +4,7 @@ use binaryen::ffi as by;
 use elf::ElfBytes;
 
 use crate::{
-    constants::PAGE_SIZE,
+    constants::{INSTRUCTION_SIZE, PAGE_SIZE},
     instructions::{AddressingMode, Condition, Instruction, Register, SizeVariant},
     module::{BinaryOp, Expression, Module, StoreVariant, UnaryOp},
 };
@@ -19,6 +19,7 @@ pub const ZERO_FLAG_LOCAL_INDEX: u32 = 3;
 pub const OVERFLOW_FLAG_LOCAL_INDEX: u32 = 4;
 
 pub const FIRST_GP_REGISTER_LOCAL_INDEX: u32 = 5;
+pub const SCRATCH_LOCAL_INDEX: u32 = 5 + GENERAL_PURPOSE_REGISTER_COUNT;
 
 fn get_reg_local_index(register: Register) -> u32 {
     use Register::*;
@@ -98,7 +99,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     // eprintln!("Analysis result: {:#?}", analysis);
     let mut module = Module::new();
 
-    let routine_names = analysis
+    let function_names = analysis
         .routines
         .iter()
         .enumerate()
@@ -110,26 +111,6 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
             )
         })
         .collect::<Vec<_>>();
-
-    let local_types = {
-        let mut local_types = Vec::new();
-
-        // SP
-        local_types.push(module.i64());
-
-        // Flags
-        local_types.push(module.i32());
-        local_types.push(module.i32());
-        local_types.push(module.i32());
-        local_types.push(module.i32());
-
-        // GP registers
-        local_types.extend((0..GENERAL_PURPOSE_REGISTER_COUNT).map(|_| module.i64()));
-
-        local_types
-    };
-    let elf_file = ElfBytes::<elf::endian::AnyEndian>::minimal_parse(elf_bytes)?;
-    let memory_info = set_up_memory("memory", elf_bytes, elf_file, &module);
 
     let param_registers = [
         Register::X0,
@@ -150,14 +131,37 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         .map(|_| module.i64())
         .collect::<Vec<_>>();
 
-    let return_type = module.tuple(&param_types);
+    let return_type = module.tuple_type(&param_types);
+
+    let local_types = {
+        let mut local_types = Vec::new();
+
+        // SP
+        local_types.push(module.i64());
+
+        // Flags
+        local_types.push(module.i32());
+        local_types.push(module.i32());
+        local_types.push(module.i32());
+        local_types.push(module.i32());
+
+        // GP registers
+        local_types.extend((0..GENERAL_PURPOSE_REGISTER_COUNT).map(|_| module.i64()));
+
+        // Additional locals for temporary values
+        local_types.push(return_type);
+
+        local_types
+    };
+    let elf_file = ElfBytes::<elf::endian::AnyEndian>::minimal_parse(elf_bytes)?;
+    let memory_info = set_up_memory("memory", elf_bytes, elf_file, &module);
 
     for (routine_index, routine) in analysis.routines.iter().enumerate() {
-        let routine_name = &routine_names[routine_index];
+        let routine_name = &function_names[routine_index];
 
-        if routine.name.as_deref().unwrap() != "_start" {
-            continue;
-        }
+        // if routine.name.as_deref().unwrap() != "_start" {
+        //     continue;
+        // }
 
         let mut relooper = module.relooper();
 
@@ -175,7 +179,10 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         for block in &routine.blocks {
             let mut block_exprs = Vec::new();
 
-            for instruction in &block.instructions {
+            for (instruction_index, instruction) in block.instructions.iter().enumerate() {
+                let current_address =
+                    block.start_address + (instruction_index as u64) * INSTRUCTION_SIZE;
+
                 match instruction {
                     Instruction::Nop => {
                         block_exprs.push(module.nop());
@@ -242,15 +249,57 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             module.const_(*value),
                         ));
                     }
-                    // Instruction::Return { target } => {
-                    //     assert!(*target == Register::X30);
+                    Instruction::BranchWithLink { target } => {
+                        let target_address =
+                            ((current_address as i64) + *target * (INSTRUCTION_SIZE as i64)) as u64;
+                        let target_routine_index = analysis
+                            .routines
+                            .iter()
+                            .position(|r| r.address == target_address)
+                            .unwrap();
+                        let target_function_name = &function_names[target_routine_index];
 
-                    //     block_exprs.push(module.return_(
-                    //         module.local_get(param_count + get_reg_local_index(*target), module.i64()),
-                    //     ));
-                    // }
+                        let arg_exprs = param_registers
+                            .iter()
+                            .map(|reg| get_reg_expr(&module, *reg, SizeVariant::Reg64, param_count))
+                            .collect::<Vec<_>>();
+
+                        block_exprs.push(module.local_set(
+                            param_count + SCRATCH_LOCAL_INDEX,
+                            module.call(target_function_name, &arg_exprs, return_type),
+                        ));
+
+                        for (param_index, param_register) in param_registers.iter().enumerate() {
+                            block_exprs.push(
+                                module.local_set(
+                                    param_count + get_reg_local_index(*param_register),
+                                    module.tuple_extract(
+                                        module.local_get(
+                                            param_count + SCRATCH_LOCAL_INDEX,
+                                            return_type,
+                                        ),
+                                        param_index as u32,
+                                    ),
+                                ),
+                            );
+                        }
+                    }
+                    Instruction::Return { target } => {
+                        assert!(*target == Register::X30);
+
+                        let return_exprs = param_registers
+                            .iter()
+                            .map(|reg| get_reg_expr(&module, *reg, SizeVariant::Reg64, param_count))
+                            .collect::<Vec<_>>();
+
+                        block_exprs.push(module.return_(module.tuple(&return_exprs)));
+                    }
                     _ => {}
                 }
+            }
+
+            if block.fallthrough_block_index.is_none() && block.jump_block_index.is_none() {
+                block_exprs.push(module.unreachable());
             }
 
             let by_block = module.block(module.none(), &block_exprs);
@@ -304,6 +353,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     module.validate();
+    // module.optimize();
     module.print();
     module.save(&mut File::create("output.wasm")?)?;
 

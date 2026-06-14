@@ -100,6 +100,25 @@ impl Module {
         })
     }
 
+    pub fn call(
+        &self,
+        target: &str,
+        operands: &[Expression],
+        return_type: by::BinaryenType,
+    ) -> Expression {
+        let target_cstr = CString::new(target).unwrap();
+
+        Expression(unsafe {
+            by::BinaryenCall(
+                self.by_module,
+                target_cstr.as_ptr(),
+                operands.as_ptr() as *mut by::BinaryenExpressionRef,
+                operands.len() as u32,
+                return_type,
+            )
+        })
+    }
+
     pub fn drop(&mut self, expr: Expression) -> Expression {
         Expression(unsafe { by::BinaryenDrop(self.by_module, expr.0) })
     }
@@ -134,7 +153,7 @@ impl Module {
             by::BinaryenAddFunction(
                 self.by_module,
                 name_cstr.as_ptr(),
-                self.tuple(params),
+                self.tuple_type(params),
                 result,
                 locals.as_ptr() as *mut by::BinaryenType,
                 locals.len() as u32,
@@ -151,11 +170,29 @@ impl Module {
         Expression(unsafe { by::BinaryenLocalSet(self.by_module, index, value.0) })
     }
 
+    pub fn return_(&self, value: Expression) -> Expression {
+        Expression(unsafe { by::BinaryenReturn(self.by_module, value.0) })
+    }
+
+    pub fn tuple(&self, operands: &[Expression]) -> Expression {
+        Expression(unsafe {
+            by::BinaryenTupleMake(
+                self.by_module,
+                operands.as_ptr() as *mut by::BinaryenExpressionRef,
+                operands.len() as u32,
+            )
+        })
+    }
+
+    pub fn tuple_extract(&self, tuple: Expression, index: u32) -> Expression {
+        Expression(unsafe { by::BinaryenTupleExtract(self.by_module, tuple.0, index) })
+    }
+
     pub fn unreachable(&self) -> Expression {
         Expression(unsafe { by::BinaryenUnreachable(self.by_module) })
     }
 
-    pub fn tuple(&self, types: &[by::BinaryenType]) -> by::BinaryenType {
+    pub fn tuple_type(&self, types: &[by::BinaryenType]) -> by::BinaryenType {
         unsafe {
             by::BinaryenTypeCreate(types.as_ptr() as *mut by::BinaryenType, types.len() as u32)
         }
