@@ -96,7 +96,7 @@ fn get_reg_expr(
                     module.binary(
                         expr,
                         module.const_(0x00_00_00_00_ff_ff_ff_ffu64),
-                        BinaryOp::And,
+                        BinaryOp::AndInt64,
                     ),
                     UnaryOp::WrapInt64,
                 ),
@@ -237,12 +237,12 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                                 module.binary(
                                     read_expr,
                                     module.const_(*operand as i32),
-                                    BinaryOp::Add,
+                                    BinaryOp::AddInt32,
                                 ),
                                 UnaryOp::ExtendUInt32,
                             ),
                             SizeVariant::Reg64 => {
-                                module.binary(read_expr, module.const_(*operand), BinaryOp::Add)
+                                module.binary(read_expr, module.const_(*operand), BinaryOp::AddInt64)
                             }
                         };
 
@@ -263,7 +263,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             module.binary(
                                 get_reg_expr(&module, *source, *variant, param_count),
                                 module.const_(*operand),
-                                BinaryOp::Sub,
+                                BinaryOp::SubInt64,
                             ),
                         ));
                     }
@@ -286,7 +286,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                                     param_count,
                                 ),
                                 module.const_(address.mode.access_offset() as i64),
-                                BinaryOp::Add,
+                                BinaryOp::AddInt64,
                             ),
                             0,
                             8,
@@ -304,7 +304,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                                         param_count,
                                     ),
                                     module.const_(writeback_offset as i64),
-                                    BinaryOp::Add,
+                                    BinaryOp::AddInt64,
                                 ),
                             ));
                         }
@@ -440,7 +440,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             Condition::EQ => module.binary(
                                 module.local_get(param_count + ZERO_FLAG_LOCAL_INDEX, module.i32()),
                                 module.const_(1i32),
-                                BinaryOp::Eq,
+                                BinaryOp::EqInt32,
                             ),
                             _ => todo!(),
                         })
