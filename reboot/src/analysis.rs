@@ -479,6 +479,35 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                     .find(|(end_addr, _)| *end_addr > addr)
                     .unwrap();
 
+                let fallthrough_block_index = matches!(
+                    end_kind,
+                    BlockEndKind::Fallthrough
+                        | BlockEndKind::Jump(Jump {
+                            conditional: true,
+                            ..
+                        })
+                )
+                .then(|| {
+                    block_start_addresses
+                        .iter()
+                        .position(|&start_addr| start_addr == *end_addr)
+                        .unwrap()
+                });
+
+                let mut jump_block_index = match end_kind {
+                    BlockEndKind::Jump(jump) => Some(
+                        block_start_addresses
+                            .iter()
+                            .position(|&start_addr| start_addr == jump.target_address)
+                            .unwrap(),
+                    ),
+                    _ => None,
+                };
+
+                if fallthrough_block_index == jump_block_index {
+                    jump_block_index = None;
+                }
+
                 Block {
                     start_address: addr,
                     instruction_count: ((end_addr - addr) / INSTRUCTION_SIZE),
@@ -487,30 +516,8 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                         as usize)
                         ..(((end_addr - segment.address) / INSTRUCTION_SIZE) as usize)]
                         .to_vec(),
-                    fallthrough_block_index: match end_kind {
-                        BlockEndKind::Fallthrough => Some(
-                            block_start_addresses
-                                .iter()
-                                .position(|&start_addr| start_addr == *end_addr)
-                                .unwrap(),
-                        ),
-                        BlockEndKind::Jump(jump) if jump.conditional => Some(
-                            block_start_addresses
-                                .iter()
-                                .position(|&start_addr| start_addr == *end_addr)
-                                .unwrap(),
-                        ),
-                        _ => None,
-                    },
-                    jump_block_index: match end_kind {
-                        BlockEndKind::Jump(jump) => Some(
-                            block_start_addresses
-                                .iter()
-                                .position(|&start_addr| start_addr == jump.target_address)
-                                .unwrap(),
-                        ),
-                        _ => None,
-                    },
+                    fallthrough_block_index,
+                    jump_block_index,
                 }
             })
             .collect::<Vec<_>>();

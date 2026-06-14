@@ -201,6 +201,8 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         //     continue;
         // }
 
+        // eprintln!("Blocks: {:#?}", routine.blocks);
+
         let mut relooper = module.relooper();
 
         let mut routine_exprs = Vec::new();
@@ -276,45 +278,55 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                         source,
                         variant,
                     } => {
-                        let operand1 = get_reg_expr(&module, *source, *variant, param_count);
-                        let operand2 = module.const_(*operand);
-                        let result = module.binary(operand1, operand2, BinaryOp::SubInt64);
+                        let get_operand1 = || get_reg_expr(&module, *source, *variant, param_count);
+                        let get_operand2 = || module.const_(*operand);
+                        let get_result =
+                            || get_reg_expr(&module, *destination, *variant, param_count);
 
-                        let sign_operand1 =
-                            module.binary(operand1, module.const_(63i64), BinaryOp::LtSInt64);
-                        let sign_operand2 =
-                            module.binary(operand2, module.const_(63i64), BinaryOp::LtSInt64);
-                        let sign_result =
-                            module.binary(result, module.const_(63i64), BinaryOp::LtSInt64);
+                        let get_sign_operand1 = || {
+                            module.binary(get_operand1(), module.const_(63i64), BinaryOp::LtSInt64)
+                        };
+                        let get_sign_operand2 = || {
+                            module.binary(get_operand2(), module.const_(63i64), BinaryOp::LtSInt64)
+                        };
+                        let get_sign_result = || {
+                            module.binary(get_result(), module.const_(63i64), BinaryOp::LtSInt64)
+                        };
 
                         block_exprs.extend(&[
-                            module
-                                .local_set(param_count + get_reg_local_index(*destination), result),
+                            module.local_set(
+                                param_count + get_reg_local_index(*destination),
+                                module.binary(get_operand1(), get_operand2(), BinaryOp::SubInt64),
+                            ),
                             module.local_set(
                                 param_count + NEGATIVE_FLAG_LOCAL_INDEX,
-                                module.binary(result, module.const_(0i64), BinaryOp::LtSInt64),
+                                module.binary(
+                                    get_result(),
+                                    module.const_(0i64),
+                                    BinaryOp::LtSInt64,
+                                ),
                             ),
                             module.local_set(
                                 param_count + ZERO_FLAG_LOCAL_INDEX,
-                                module.binary(result, module.const_(0i64), BinaryOp::EqInt64),
+                                module.binary(get_result(), module.const_(0i64), BinaryOp::EqInt64),
                             ),
                             // C = (A >= B) for unsigned integers
                             module.local_set(
                                 param_count + CARRY_FLAG_LOCAL_INDEX,
-                                module.binary(operand1, operand2, BinaryOp::GeUInt64),
+                                module.binary(get_operand1(), get_operand2(), BinaryOp::GeUInt64),
                             ),
                             // V = (A[sign] ≠ B[sign]) AND (Result[sign] ≠ A[sign])
                             module.local_set(
                                 param_count + OVERFLOW_FLAG_LOCAL_INDEX,
                                 module.binary(
-                                    module.binary(sign_operand1, sign_operand2, BinaryOp::XorInt32),
                                     module.binary(
-                                        sign_operand1,
-                                        module.binary(
-                                            sign_operand1,
-                                            sign_result,
-                                            BinaryOp::XorInt32,
-                                        ),
+                                        get_sign_operand1(),
+                                        get_sign_operand2(),
+                                        BinaryOp::XorInt32,
+                                    ),
+                                    module.binary(
+                                        get_sign_operand1(),
+                                        get_sign_result(),
                                         BinaryOp::XorInt32,
                                     ),
                                     BinaryOp::AndInt32,
@@ -494,9 +506,12 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                         Some(match condition {
                             Condition::EQ => module.binary(
                                 module.local_get(param_count + ZERO_FLAG_LOCAL_INDEX, module.i32()),
-                                module.const_(1i32),
+                                module.const_(0i32),
                                 BinaryOp::EqInt32,
                             ),
+                            Condition::NE => {
+                                module.local_get(param_count + ZERO_FLAG_LOCAL_INDEX, module.i32())
+                            }
                             _ => todo!(),
                         })
                     }
@@ -557,7 +572,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     module.print();
     module.validate();
     module.optimize();
-    // module.print();
+    module.print();
     module.save(&mut File::create("output.wasm")?)?;
 
     Ok(())
