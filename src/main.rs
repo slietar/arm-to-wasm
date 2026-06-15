@@ -30,7 +30,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subcommand(
             clap::command!("translate")
                 .about("Translate an ELF file to WebAssembly")
-                .arg(clap::arg!(<FILE> "The ELF file to translate").required(true)),
+                .arg(clap::arg!(<FILE> "The ELF file to translate").required(true))
+                .arg(
+                    clap::arg!(--optimize "Optimize the generated WebAssembly")
+                        .required(false)
+                ),
         );
 
     let matches = command.get_matches();
@@ -47,7 +51,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             instructions::decode_file(&elf_bytes)?;
         }
         "translate" => {
-            translation::translate(&elf_bytes)?;
+            let optimize = subcommand_matches.get_flag("optimize");
+            translation::translate(&elf_bytes, optimize)?;
         }
         _ => unreachable!(),
     }

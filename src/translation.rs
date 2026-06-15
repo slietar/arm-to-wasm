@@ -99,7 +99,7 @@ fn get_reg_expr(
     }
 }
 
-pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+pub fn translate(elf_bytes: &[u8], optimize: bool) -> Result<(), Box<dyn std::error::Error>> {
     let analysis = crate::analysis::analyze(elf_bytes)?;
 
     // eprintln!("Analysis result: {:#?}", analysis);
@@ -780,11 +780,16 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         module.export_function(entry_function_name, "_entry");
     }
 
-    // module.print();
-    module.validate();
-    module.optimize();
-    module.print();
-    module.save(&mut File::create("output.wasm")?)?;
+    let ok = module.validate();
+
+    if ok {
+        if optimize {
+            module.optimize();
+        }
+
+        module.print();
+        module.save(&mut File::create("output.wasm")?)?;
+    }
 
     Ok(())
 }
