@@ -217,12 +217,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                     block_exprs.push(module.local_set(
                         param_count + get_reg_local_index(address.base),
                         module.binary(
-                            get_reg_expr(
-                                &module,
-                                address.base,
-                                SizeVariant::Reg64,
-                                param_count,
-                            ),
+                            get_reg_expr(&module, address.base, SizeVariant::Reg64, param_count),
                             module.const_(writeback_offset as i64),
                             BinaryOp::AddInt64,
                         ),
@@ -636,6 +631,8 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                     Instruction::Branch { .. } | Instruction::BranchConditionally { .. } => {
                         // Branches are handled by the relooper
                     }
+                    Instruction::CompareAndBranchOnNonzero { .. }
+                    | Instruction::CompareAndBranchOnZero { .. } => {}
                     _ => {
                         eprintln!(
                             "Unimplemented instruction at {:#x}: {:?}",
@@ -675,7 +672,8 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if let Some(jump_block_index) = block.jump_block_index {
-                let condition_expr = match &block.instructions.last().unwrap() {
+                let last_instruction = block.instructions.last().unwrap();
+                let condition_expr = match last_instruction {
                     Instruction::Branch { .. } => None,
                     Instruction::BranchConditionally { condition, .. } => Some(match condition {
                         Condition::EQ => module.binary(
@@ -688,6 +686,37 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         _ => todo!(),
                     }),
+                    Instruction::CompareAndBranchOnNonzero {
+                        target,
+                        value,
+                        variant,
+                    }
+                    | Instruction::CompareAndBranchOnZero {
+                        target,
+                        value,
+                        variant,
+                    } => Some(module.binary(
+                        get_reg_expr(&module, *value, *variant, param_count),
+                        match variant {
+                            SizeVariant::Reg32 => module.const_(0i32),
+                            SizeVariant::Reg64 => module.const_(0i64),
+                        },
+                        match (last_instruction, variant) {
+                            (Instruction::CompareAndBranchOnNonzero { .. }, SizeVariant::Reg32) => {
+                                BinaryOp::NeInt32
+                            }
+                            (Instruction::CompareAndBranchOnNonzero { .. }, SizeVariant::Reg64) => {
+                                BinaryOp::NeInt64
+                            }
+                            (Instruction::CompareAndBranchOnZero { .. }, SizeVariant::Reg32) => {
+                                BinaryOp::EqInt32
+                            }
+                            (Instruction::CompareAndBranchOnZero { .. }, SizeVariant::Reg64) => {
+                                BinaryOp::EqInt64
+                            }
+                            _ => unreachable!(),
+                        },
+                    )),
                     _ => todo!(),
                 };
 
@@ -751,10 +780,10 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         module.export_function(entry_function_name, "_entry");
     }
 
-    module.print();
-    module.validate();
-    // module.optimize();
     // module.print();
+    module.validate();
+    module.optimize();
+    module.print();
     module.save(&mut File::create("output.wasm")?)?;
 
     Ok(())

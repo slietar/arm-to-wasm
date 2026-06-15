@@ -235,35 +235,15 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                         is_prologue = false;
                         break;
                     }
-                    Instruction::BranchConditionally { target, condition } => {
+                    Instruction::BranchConditionally { target, .. }
+                    | Instruction::CompareAndBranchOnNonzero { target, .. }
+                    | Instruction::CompareAndBranchOnZero { target, .. }
+                    | Instruction::TestBitAndBranchIfNonzero { target, .. }
+                    | Instruction::TestBitAndBranchIfZero { target, .. } => {
                         let target_address = ((current_address as i64)
                             + (*target as i64) * (INSTRUCTION_SIZE as i64))
                             as u64;
                         // eprintln!("Cond Branch target address: {:#x}", target_address);
-
-                        queue.push(target_address);
-                        jumps.push(Jump {
-                            conditional: true,
-                            source_address: current_address,
-                            target_address,
-                        });
-                        is_prologue = false;
-                    }
-                    Instruction::TestBitAndBranchIfNonzero {
-                        bit,
-                        target,
-                        value,
-                        variant,
-                    }
-                    | Instruction::TestBitAndBranchIfZero {
-                        bit,
-                        target,
-                        value,
-                        variant,
-                    } => {
-                        let target_address = ((current_address as i64)
-                            + (*target as i64) * (INSTRUCTION_SIZE as i64))
-                            as u64;
 
                         queue.push(target_address);
                         jumps.push(Jump {
@@ -632,9 +612,9 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
     routines.sort_by_key(|routine| -(routine.address as i64));
 
     Ok(Analysis {
-        entry_routine_index: routines_names
-            .keys()
-            .position(|&addr| addr == entry_address),
+        entry_routine_index: routines
+            .iter()
+            .position(|routine| routine.address == entry_address),
         routines,
     })
 }
