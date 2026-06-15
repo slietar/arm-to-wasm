@@ -186,6 +186,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
         let mut is_prologue = true;
 
         let mut stack_accesses = Vec::<StackAccess>::new();
+        let mut block_exit_addresses = HashSet::<u64>::new();
 
         while !queue.is_empty() {
             let branch_address = queue.pop().unwrap();
@@ -338,6 +339,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                     }
                     Instruction::Return { target } => {
                         is_prologue = false;
+                        block_exit_addresses.insert(current_address);
                         break;
                     }
 
@@ -455,6 +457,11 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
                     (jump.target_address, BlockEndKind::Fallthrough),
                 ]
             })
+            .chain(
+                block_exit_addresses
+                    .iter()
+                    .map(|&address| (address + INSTRUCTION_SIZE, BlockEndKind::Exit)),
+            )
             .collect::<Vec<_>>();
 
         block_ends.push((routine_max_address, BlockEndKind::Exit));
@@ -463,8 +470,8 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             (
                 *address,
                 match jump {
-                    BlockEndKind::Exit => 2,
-                    BlockEndKind::Fallthrough => 1,
+                    BlockEndKind::Exit => 1,
+                    BlockEndKind::Fallthrough => 2,
                     BlockEndKind::Jump(_) => 0,
                 },
             )
@@ -633,7 +640,7 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
 pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let analysis = analyze(elf_bytes)?;
 
-    // eprintln!("Analysis result: {:#?}", analysis);
+    eprintln!("Analysis result: {:#?}", analysis);
 
     Ok(())
 }
@@ -693,11 +700,13 @@ impl Hash for RegisterReadWalker {
 }
 
 fn hash_set<H: std::hash::Hasher, T: Hash + Eq>(state: &mut H, set: &HashSet<T>) {
-    let build_hasher = std::hash::RandomState::default();
-
     let hash = set
         .iter()
-        .map(|t| std::hash::BuildHasher::hash_one(&build_hasher, t))
+        .map(|t| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            t.hash(&mut hasher);
+            std::hash::Hasher::finish(&hasher)
+        })
         .fold(0, u64::wrapping_add);
 
     state.write_usize(set.len());

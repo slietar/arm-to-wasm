@@ -92,14 +92,7 @@ fn get_reg_expr(
             let expr = module.local_get(param_count + local_index, module.i64());
 
             match variant {
-                SizeVariant::Reg32 => module.unary(
-                    module.binary(
-                        expr,
-                        module.const_(0x00_00_00_00_ff_ff_ff_ffu64),
-                        BinaryOp::AndInt64,
-                    ),
-                    UnaryOp::WrapInt64,
-                ),
+                SizeVariant::Reg32 => module.unary(expr, UnaryOp::WrapInt64),
                 SizeVariant::Reg64 => expr,
             }
         }
@@ -216,7 +209,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
         let mut relooper_blocks = Vec::new();
 
-        for block in &routine.blocks {
+        for (block_index, block) in routine.blocks.iter().enumerate() {
             let mut block_exprs = Vec::new();
 
             for (instruction_index, instruction) in block.instructions.iter().enumerate() {
@@ -279,54 +272,97 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                         variant,
                     } => {
                         let get_operand1 = || get_reg_expr(&module, *source, *variant, param_count);
-                        let get_operand2 = || module.const_(*operand);
+                        let get_operand2 = || match variant {
+                            SizeVariant::Reg32 => module.const_(*operand as i32),
+                            SizeVariant::Reg64 => module.const_(*operand),
+                        };
+
+                        // TODO: Avoid i32 -> i64 -> i32 conversion for Reg32
                         let get_result =
                             || get_reg_expr(&module, *destination, *variant, param_count);
 
-                        let get_sign_operand1 = || {
-                            module.binary(get_operand1(), module.const_(63i64), BinaryOp::LtSInt64)
+                        // TODO: Fix
+                        let sign = |expr: Expression| match variant {
+                            SizeVariant::Reg32 => {
+                                module.binary(expr, module.const_(0i32), BinaryOp::LtSInt32)
+                            }
+                            SizeVariant::Reg64 => {
+                                module.binary(expr, module.const_(0i64), BinaryOp::LtSInt64)
+                            }
                         };
-                        let get_sign_operand2 = || {
-                            module.binary(get_operand2(), module.const_(63i64), BinaryOp::LtSInt64)
-                        };
-                        let get_sign_result = || {
-                            module.binary(get_result(), module.const_(63i64), BinaryOp::LtSInt64)
-                        };
+
+                        let mut result_expr = module.binary(
+                            get_operand1(),
+                            get_operand2(),
+                            match variant {
+                                SizeVariant::Reg32 => BinaryOp::SubInt32,
+                                SizeVariant::Reg64 => BinaryOp::SubInt64,
+                            },
+                        );
+
+                        if let SizeVariant::Reg32 = variant {
+                            result_expr = module.unary(result_expr, UnaryOp::ExtendUInt32);
+                        }
 
                         block_exprs.extend(&[
                             module.local_set(
                                 param_count + get_reg_local_index(*destination),
-                                module.binary(get_operand1(), get_operand2(), BinaryOp::SubInt64),
+                                result_expr,
                             ),
                             module.local_set(
                                 param_count + NEGATIVE_FLAG_LOCAL_INDEX,
-                                module.binary(
-                                    get_result(),
-                                    module.const_(0i64),
-                                    BinaryOp::LtSInt64,
-                                ),
+                                match variant {
+                                    SizeVariant::Reg32 => module.binary(
+                                        get_result(),
+                                        module.const_(0i32),
+                                        BinaryOp::LtSInt32,
+                                    ),
+                                    SizeVariant::Reg64 => module.binary(
+                                        get_result(),
+                                        module.const_(0i64),
+                                        BinaryOp::LtSInt64,
+                                    ),
+                                },
                             ),
                             module.local_set(
                                 param_count + ZERO_FLAG_LOCAL_INDEX,
-                                module.binary(get_result(), module.const_(0i64), BinaryOp::EqInt64),
+                                match variant {
+                                    SizeVariant::Reg32 => module.binary(
+                                        get_result(),
+                                        module.const_(0i32),
+                                        BinaryOp::EqInt32,
+                                    ),
+                                    SizeVariant::Reg64 => module.binary(
+                                        get_result(),
+                                        module.const_(0i64),
+                                        BinaryOp::EqInt64,
+                                    ),
+                                },
                             ),
                             // C = (A >= B) for unsigned integers
                             module.local_set(
                                 param_count + CARRY_FLAG_LOCAL_INDEX,
-                                module.binary(get_operand1(), get_operand2(), BinaryOp::GeUInt64),
+                                module.binary(
+                                    get_operand1(),
+                                    get_operand2(),
+                                    match variant {
+                                        SizeVariant::Reg32 => BinaryOp::GeUInt32,
+                                        SizeVariant::Reg64 => BinaryOp::GeUInt64,
+                                    },
+                                ),
                             ),
                             // V = (A[sign] ≠ B[sign]) AND (Result[sign] ≠ A[sign])
                             module.local_set(
                                 param_count + OVERFLOW_FLAG_LOCAL_INDEX,
                                 module.binary(
                                     module.binary(
-                                        get_sign_operand1(),
-                                        get_sign_operand2(),
+                                        sign(get_operand1()),
+                                        sign(get_operand2()),
                                         BinaryOp::XorInt32,
                                     ),
                                     module.binary(
-                                        get_sign_operand1(),
-                                        get_sign_result(),
+                                        sign(get_operand1()),
+                                        sign(get_result()),
                                         BinaryOp::XorInt32,
                                     ),
                                     BinaryOp::AndInt32,
@@ -472,6 +508,9 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             module.const_(address),
                         ));
                     }
+                    Instruction::Branch { .. } | Instruction::BranchConditionally { .. } => {
+                        // Branches are handled by the relooper
+                    }
                     _ => {
                         eprintln!(
                             "Unimplemented instruction at {:#x}: {:?}",
@@ -483,6 +522,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
             if block.fallthrough_block_index.is_none() && block.jump_block_index.is_none() {
                 block_exprs.push(module.unreachable());
+                // eprintln!("Unreachable block at index {}", block_index);
             }
 
             let by_block = module.block(module.none(), &block_exprs);
@@ -491,38 +531,55 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
             relooper_blocks.push(relooper_block);
         }
 
-        for (block, relooper_block) in routine.blocks.iter().zip(relooper_blocks.iter()) {
+        // eprintln!("Blocks: {:#?}", routine.blocks);
+
+        for (block_index, (block, relooper_block)) in routine
+            .blocks
+            .iter()
+            .zip(relooper_blocks.iter())
+            .enumerate()
+        {
             if let Some(fallthrough_block_index) = block.fallthrough_block_index {
                 relooper.branch(
                     relooper_block,
                     &relooper_blocks[fallthrough_block_index],
                     None,
                 );
+
+                // eprintln!("Branch {} -> {}", block_index, fallthrough_block_index);
             }
 
             if let Some(jump_block_index) = block.jump_block_index {
-                let condition = match &block.instructions.last().unwrap() {
-                    Instruction::BranchConditionally { target, condition } => {
-                        Some(match condition {
-                            Condition::EQ => module.binary(
-                                module.local_get(param_count + ZERO_FLAG_LOCAL_INDEX, module.i32()),
-                                module.const_(0i32),
-                                BinaryOp::EqInt32,
-                            ),
-                            Condition::NE => {
-                                module.local_get(param_count + ZERO_FLAG_LOCAL_INDEX, module.i32())
-                            }
-                            _ => todo!(),
-                        })
-                    }
-                    _ => None,
+                let condition_expr = match &block.instructions.last().unwrap() {
+                    Instruction::Branch { .. } => None,
+                    Instruction::BranchConditionally { condition, .. } => Some(match condition {
+                        Condition::EQ => module.binary(
+                            module.local_get(param_count + ZERO_FLAG_LOCAL_INDEX, module.i32()),
+                            module.const_(0i32),
+                            BinaryOp::EqInt32,
+                        ),
+                        Condition::NE => {
+                            module.local_get(param_count + ZERO_FLAG_LOCAL_INDEX, module.i32())
+                        }
+                        _ => todo!(),
+                    }),
+                    _ => todo!(),
                 };
 
                 relooper.branch(
                     relooper_block,
                     &relooper_blocks[jump_block_index],
-                    condition,
+                    condition_expr,
                 );
+
+                // if condition_expr.is_some() {
+                //     eprintln!(
+                //         "Branch {} -> {} with condition",
+                //         block_index, jump_block_index
+                //     );
+                // } else {
+                //     eprintln!("Branch {} -> {}", block_index, jump_block_index);
+                // }
             }
         }
 
@@ -659,7 +716,7 @@ pub fn set_up_memory(
         by::BinaryenSetMemory(
             module.by_module,
             (mapped_memory_page_count + stack_memory_page_count) as u32,
-            i32::cast_unsigned(-1),
+            u32::MAX,
             memory_name.as_ptr(),
             segment_name_ptrs.as_mut_ptr() as *mut *const i8,
             segment_datas.as_mut_ptr() as *mut *const i8,

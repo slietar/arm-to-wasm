@@ -16,7 +16,7 @@ impl std::error::Error for ExitError {}
 fn main() -> wasmtime::Result<()> {
     let engine = Engine::default();
 
-    let bytes = std::fs::read("../reboot/output.wasm")?;
+    let bytes = std::fs::read("../output.wasm")?;
     let module = Module::new(&engine, bytes)?;
 
     let mut linker = Linker::new(&engine);
