@@ -6,7 +6,7 @@ use elf::ElfBytes;
 use crate::{
     constants::{INSTRUCTION_SIZE, PAGE_SIZE},
     instructions::{AddressingMode, Condition, Instruction, Register, Shift, SizeVariant},
-    module::{BinaryOp, Expression, Module, StoreVariant, UnaryOp},
+    module::{BinaryOp, Expression, LoadVariant, Module, StoreVariant, UnaryOp},
 };
 
 pub const GENERAL_PURPOSE_REGISTER_COUNT: u32 = 31;
@@ -425,6 +425,47 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             result_expr,
                         ));
                     }
+                    Instruction::LoadRegisterImmediate { address, destination, variant } => {
+                        block_exprs.push(module.local_set(
+                            param_count + get_reg_local_index(*destination),
+                            module.load(
+                                match variant {
+                                    SizeVariant::Reg32 => LoadVariant::I64L32 { signed: false },
+                                    SizeVariant::Reg64 => LoadVariant::I64,
+                                },
+                                module.binary(
+                                    get_reg_expr(
+                                        &module,
+                                        address.base,
+                                        SizeVariant::Reg64,
+                                        param_count,
+                                    ),
+                                    module.const_(address.mode.access_offset() as i64),
+                                    BinaryOp::AddInt64,
+                                ),
+                                0,
+                                8, // TODO: Use correct alignment
+                                &memory_info.name,
+                            ),
+                        ));
+
+                        // TODO: Deduplicate with STR
+                        if let Some(writeback_offset) = address.mode.writeback_offset() {
+                            block_exprs.push(module.local_set(
+                                param_count + get_reg_local_index(address.base),
+                                module.binary(
+                                    get_reg_expr(
+                                        &module,
+                                        address.base,
+                                        SizeVariant::Reg64,
+                                        param_count,
+                                    ),
+                                    module.const_(writeback_offset as i64),
+                                    BinaryOp::AddInt64,
+                                ),
+                            ));
+                        }
+                    }
                     Instruction::StoreRegisterImmediate {
                         address,
                         value,
@@ -447,7 +488,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                                 BinaryOp::AddInt64,
                             ),
                             0,
-                            8,
+                            8, // TODO: Use correct alignment
                             &memory_info.name,
                         ));
 

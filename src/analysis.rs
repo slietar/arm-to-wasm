@@ -629,6 +629,8 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
     // eprintln!("Found {} unique function addresses", routines.len());
     // eprintln!("Function addresses: {:#x?}", routines.iter().filter(|(_, routine)| routine.name.is_none()).map(|(addr, _)| addr).collect::<Vec<_>>());
 
+    routines.sort_by_key(|routine| -(routine.address as i64));
+
     Ok(Analysis {
         entry_routine_index: routines_names
             .keys()
