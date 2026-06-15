@@ -5,7 +5,7 @@ use elf::ElfBytes;
 
 use crate::{
     constants::{INSTRUCTION_SIZE, PAGE_SIZE},
-    instructions::{AddressingMode, Condition, Instruction, Register, Shift, SizeVariant},
+    instructions::{Address, AddressingMode, Condition, Instruction, Register, Shift, SizeVariant},
     module::{BinaryOp, Expression, LoadVariant, Module, StoreVariant, UnaryOp},
 };
 
@@ -211,6 +211,24 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
         for (block_index, block) in routine.blocks.iter().enumerate() {
             let mut block_exprs = Vec::new();
+
+            let writeback = |address: &Address, block_exprs: &mut Vec<_>| {
+                if let Some(writeback_offset) = address.mode.writeback_offset() {
+                    block_exprs.push(module.local_set(
+                        param_count + get_reg_local_index(address.base),
+                        module.binary(
+                            get_reg_expr(
+                                &module,
+                                address.base,
+                                SizeVariant::Reg64,
+                                param_count,
+                            ),
+                            module.const_(writeback_offset as i64),
+                            BinaryOp::AddInt64,
+                        ),
+                    ));
+                }
+            };
 
             for (instruction_index, instruction) in block.instructions.iter().enumerate() {
                 let current_address =
@@ -425,7 +443,11 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             result_expr,
                         ));
                     }
-                    Instruction::LoadRegisterImmediate { address, destination, variant } => {
+                    Instruction::LoadRegisterImmediate {
+                        address,
+                        destination,
+                        variant,
+                    } => {
                         block_exprs.push(module.local_set(
                             param_count + get_reg_local_index(*destination),
                             module.load(
@@ -449,22 +471,7 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             ),
                         ));
 
-                        // TODO: Deduplicate with STR
-                        if let Some(writeback_offset) = address.mode.writeback_offset() {
-                            block_exprs.push(module.local_set(
-                                param_count + get_reg_local_index(address.base),
-                                module.binary(
-                                    get_reg_expr(
-                                        &module,
-                                        address.base,
-                                        SizeVariant::Reg64,
-                                        param_count,
-                                    ),
-                                    module.const_(writeback_offset as i64),
-                                    BinaryOp::AddInt64,
-                                ),
-                            ));
-                        }
+                        writeback(&address, &mut block_exprs);
                     }
                     Instruction::StoreRegisterImmediate {
                         address,
@@ -492,9 +499,26 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             &memory_info.name,
                         ));
 
-                        if let Some(writeback_offset) = address.mode.writeback_offset() {
-                            block_exprs.push(module.local_set(
-                                param_count + get_reg_local_index(address.base),
+                        writeback(&address, &mut block_exprs);
+                    }
+                    Instruction::StorePairOfRegisters {
+                        address,
+                        value1,
+                        value2,
+                        variant,
+                    } => {
+                        let second_offset = match variant {
+                            SizeVariant::Reg32 => 4,
+                            SizeVariant::Reg64 => 8,
+                        };
+
+                        for (value, offset) in [(value1, 0), (value2, second_offset)] {
+                            block_exprs.push(module.store(
+                                match variant {
+                                    SizeVariant::Reg32 => StoreVariant::I64L32,
+                                    SizeVariant::Reg64 => StoreVariant::I64,
+                                },
+                                get_reg_expr(&module, *value, *variant, param_count),
                                 module.binary(
                                     get_reg_expr(
                                         &module,
@@ -502,11 +526,16 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                                         SizeVariant::Reg64,
                                         param_count,
                                     ),
-                                    module.const_(writeback_offset as i64),
+                                    module.const_(address.mode.access_offset() as i64),
                                     BinaryOp::AddInt64,
                                 ),
+                                offset,
+                                8, // TODO: Use correct alignment
+                                &memory_info.name,
                             ));
                         }
+
+                        writeback(&address, &mut block_exprs);
                     }
                     Instruction::MoveWideWithZero {
                         destination,
