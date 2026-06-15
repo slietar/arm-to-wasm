@@ -133,6 +133,14 @@ impl InstructionInfo for Instruction {
                 },
             ],
             SupervisorCall { .. } => Vec::new(),
+            CompareAndBranchOnNonzero { value, variant, .. } => vec![SizedRegister {
+                register: *value,
+                variant: *variant,
+            }],
+            CompareAndBranchOnZero { value, variant, .. } => vec![SizedRegister {
+                register: *value,
+                variant: *variant,
+            }],
             TestBitAndBranchIfNonzero { value, variant, .. } => vec![SizedRegister {
                 register: *value,
                 variant: *variant,
@@ -234,6 +242,8 @@ impl InstructionInfo for Instruction {
                 variant: *variant,
             }],
             SupervisorCall { .. } => Vec::new(),
+            CompareAndBranchOnNonzero { .. } => Vec::new(),
+            CompareAndBranchOnZero { .. } => Vec::new(),
             TestBitAndBranchIfNonzero { .. } => Vec::new(),
             TestBitAndBranchIfZero { .. } => Vec::new(),
             Unknown => Vec::new(),

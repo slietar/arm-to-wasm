@@ -317,6 +317,16 @@ pub enum Instruction {
     BranchWithLink {
         target: i64,
     },
+    CompareAndBranchOnNonzero {
+        target: i64,
+        value: Register,
+        variant: SizeVariant,
+    },
+    CompareAndBranchOnZero {
+        target: i64,
+        value: Register,
+        variant: SizeVariant,
+    },
     FormPCRelativeAddress {
         destination: Register,
         value: i64,
@@ -776,6 +786,36 @@ impl Instruction {
             return Self::BranchConditionally {
                 target: bytes.immediate(5, 19, true) as i64,
                 condition: Condition::decode(get_bits(value, 0, 4)),
+            };
+        }
+
+        // CBNZ
+        // Compare and branch on nonzero
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/CBNZ--Compare-and-branch-on-nonzero-?lang=en
+        if equal_masked(
+            value,
+            0b0111_1111_0000_0000_0000_0000_0000_0000,
+            0b0011_0101_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::CompareAndBranchOnNonzero {
+                target: bytes.immediate(5, 19, true) as i64,
+                value: bytes.register(0, true),
+                variant: bytes.variant(),
+            };
+        }
+
+        // CBZ
+        // Compare and branch on zero
+        // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/CBZ--Compare-and-branch-on-zero-?lang=en
+        if equal_masked(
+            value,
+            0b0111_1111_0000_0000_0000_0000_0000_0000,
+            0b0011_0100_0000_0000_0000_0000_0000_0000,
+        ) {
+            return Self::CompareAndBranchOnZero {
+                target: bytes.immediate(5, 19, true) as i64,
+                value: bytes.register(0, true),
+                variant: bytes.variant(),
             };
         }
 
