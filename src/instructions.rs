@@ -4,7 +4,7 @@ use capstone::arch::BuildsCapstone as _;
 use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 
 use crate::{
-    INSTRUCTION_SIZE,
+    constants::INSTRUCTION_SIZE,
     decoding::{decode_bool, equal_masked, get_bits, get_bits_range, sign_extend},
 };
 

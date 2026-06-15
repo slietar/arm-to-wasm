@@ -5,32 +5,52 @@
 mod analysis;
 mod constants;
 mod decoding;
+mod instruction_helper;
 mod instructions;
 mod module;
 mod translation;
-mod instruction_helper;
 // mod translator;
 
+use clap::Parser;
 use std::path::PathBuf;
 
-const INSTRUCTION_SIZE: u64 = 4;
-const PAGE_SIZE: u32 = 65_536;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    eprintln!("Args: {:?}", args);
-    return Ok(());
+    let command = clap::Command::new("awsm")
+        .subcommand_required(true)
+        .subcommand(
+            clap::command!("analyze")
+                .about("Analyze an ELF file")
+                .arg(clap::arg!(<FILE> "The ELF file to analyze").required(true)),
+        )
+        .subcommand(
+            clap::command!("disassemble")
+                .about("Disassemble an ELF file")
+                .arg(clap::arg!(<FILE> "The ELF file to disassemble").required(true)),
+        )
+        .subcommand(
+            clap::command!("translate")
+                .about("Translate an ELF file to WebAssembly")
+                .arg(clap::arg!(<FILE> "The ELF file to translate").required(true)),
+        );
 
-    // let path = PathBuf::from("./examples/example");
-    // let path = PathBuf::from("../example/target/aarch64-unknown-none/debug/example");
-    // let path = PathBuf::from("/Users/simon/Developer/arm-to-wasm/runtime/target/debug/runtime");
-    // let elf_bytes = std::fs::read(path).expect("Could not read file.");
+    let matches = command.get_matches();
+    let (subcommand, subcommand_matches) = matches.subcommand().unwrap();
 
-    // let translator = translate(&elf_bytes)?;
+    let file_path = subcommand_matches.get_one::<String>("FILE").unwrap();
+    let elf_bytes = std::fs::read(file_path).expect("Could not read file.");
 
-    // analysis::main_analyze(&elf_bytes)?;
-    // instructions::decode_file(&elf_bytes)?;
-    // translation::translate(&elf_bytes)?;
+    match subcommand {
+        "analyze" => {
+            analysis::main_analyze(&elf_bytes)?;
+        }
+        "disassemble" => {
+            instructions::decode_file(&elf_bytes)?;
+        }
+        "translate" => {
+            translation::translate(&elf_bytes)?;
+        }
+        _ => unreachable!(),
+    }
 
     Ok(())
 }

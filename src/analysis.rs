@@ -6,7 +6,7 @@ use std::{
 use elf::section;
 
 use crate::{
-    INSTRUCTION_SIZE,
+    constants::INSTRUCTION_SIZE,
     instruction_helper::InstructionInfo as _,
     instructions::{Address, AddressingMode, Instruction, Register, SizeVariant, SizedRegister},
 };
