@@ -1,2 +1,3 @@
-/simple-lib
+*copy*
+/Cargo.lock
 /target

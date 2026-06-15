@@ -1,10 +1,11 @@
 [package]
-name = "arm-to-wasm"
+name = "reboot"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 binaryen = { path = "../binaryen-rs" }
-disarm64 = "0.1.20"
+capstone = "0.14.0"
+disarm64 = "0.1.26"
 elf = "0.8.0"
-mach_object = "0.1.17"
+rayon = "1.12.0"
