@@ -5,7 +5,7 @@ use elf::ElfBytes;
 
 use crate::{
     constants::{INSTRUCTION_SIZE, PAGE_SIZE},
-    instructions::{AddressingMode, Condition, Instruction, Register, SizeVariant},
+    instructions::{AddressingMode, Condition, Instruction, Register, Shift, SizeVariant},
     module::{BinaryOp, Expression, Module, StoreVariant, UnaryOp},
 };
 
@@ -370,6 +370,61 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                             ),
                         ]);
                     }
+                    Instruction::BitwiseOrShiftedRegister {
+                        destination,
+                        operand1,
+                        operand2,
+                        shift_amount,
+                        shift_type,
+                        variant,
+                    } => {
+                        let get_shift_expr =
+                            |expr: Expression,
+                             shift_type: Shift,
+                             shift_amount: u32,
+                             variant: SizeVariant| {
+                                let amount_expr = match variant {
+                                    SizeVariant::Reg32 => module.const_(shift_amount as i32),
+                                    SizeVariant::Reg64 => module.const_(shift_amount as i64),
+                                };
+
+                                let op = match (shift_type, variant) {
+                                    (Shift::LSL, SizeVariant::Reg32) => BinaryOp::ShlInt32,
+                                    (Shift::LSL, SizeVariant::Reg64) => BinaryOp::ShlInt64,
+                                    (Shift::LSR, SizeVariant::Reg32) => BinaryOp::ShrUInt32,
+                                    (Shift::LSR, SizeVariant::Reg64) => BinaryOp::ShrUInt64,
+                                    (Shift::ASR, SizeVariant::Reg32) => BinaryOp::ShrSInt32,
+                                    (Shift::ASR, SizeVariant::Reg64) => BinaryOp::ShrSInt64,
+                                    (Shift::ROR, SizeVariant::Reg32) => BinaryOp::RotRInt32,
+                                    (Shift::ROR, SizeVariant::Reg64) => BinaryOp::RotRInt64,
+                                };
+
+                                module.binary(expr, amount_expr, op)
+                            };
+
+                        let mut result_expr = module.binary(
+                            get_reg_expr(&module, *operand1, *variant, param_count),
+                            get_shift_expr(
+                                get_reg_expr(&module, *operand2, *variant, param_count),
+                                *shift_type,
+                                *shift_amount,
+                                *variant,
+                            ),
+                            match variant {
+                                SizeVariant::Reg32 => BinaryOp::OrInt32,
+                                SizeVariant::Reg64 => BinaryOp::OrInt64,
+                            },
+                        );
+
+                        if let SizeVariant::Reg32 = variant {
+                            result_expr = module.unary(result_expr, UnaryOp::ExtendUInt32);
+                        }
+
+                        block_exprs.push(module.local_set(
+                            param_count + get_reg_local_index(*destination),
+                            result_expr,
+                        ));
+                    }
                     Instruction::StoreRegisterImmediate {
                         address,
                         value,
@@ -628,8 +683,8 @@ pub fn translate(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
     module.print();
     module.validate();
-    module.optimize();
-    module.print();
+    // module.optimize();
+    // module.print();
     module.save(&mut File::create("output.wasm")?)?;
 
     Ok(())
