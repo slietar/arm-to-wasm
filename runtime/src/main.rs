@@ -21,7 +21,6 @@ fn main() -> wasmtime::Result<()> {
 
     let mut linker = Linker::new(&engine);
 
-    // Syscalls: https://arm64.syscall.sh/
     linker.func_wrap("ref", "supervisor_call", |mut caller: Caller<'_, ()>, param: i32, x8: i64, x0: i64, x1: i64, x2: i64, x3: i64, x4: i64, x5: i64| -> wasmtime::Result<(i64, i64)> {
         match x8 {
             0x40 => {

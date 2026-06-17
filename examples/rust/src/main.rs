@@ -17,25 +17,13 @@ use core::arch::asm;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() {
-    let a = 5;
+    let mut x = 0;
 
-    if sum(a, 3) == 15 {
-        exit(0);
+    for i in 0..6 {
+        x += i;
     }
 
-    // loop {
-    //     x[i] = 234;
-
-    //     if i == 15 {
-    //         break;
-    //     }
-
-    //     i += 1;
-    // }
-}
-
-fn sum(a: i32, b: i32) -> i32 {
-    a
+    exit(x);
 }
 
 fn exit(code: i32) /* -> ! */ {

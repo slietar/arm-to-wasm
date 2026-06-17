@@ -51,6 +51,10 @@
   - List and sizes of x0-x7 arguments
   - Argument values
 
+```sh
+$ cargo run disassemble (lima cat (lima which ls) | psub)
+```
+
 
 ## References
 
@@ -60,3 +64,13 @@
 - https://github.com/lifting-bits/remill
 - https://github.com/mirkosertic/Bytecoder
 - https://teavm.org/
+- https://arm64.syscall.sh/
+- [AArch64 Bitmask Immediates](https://kddnewton.com/2022/08/11/aarch64-bitmask-immediates.html)
+- [ELF for the Arm® 64-bit Architecture (AArch64)](https://github.com/ARM-software/abi-aa/blob/daa7a94ca55973736c0e434a67a6e4bbcd35d7fa/aaelf64/aaelf64.rst)
+- [Procedure Call Standard for the Arm® 64-bit Architecture (AArch64)](https://github.com/ARM-software/abi-aa/blob/daa7a94ca55973736c0e434a67a6e4bbcd35d7fa/aapcs64/aapcs64.rst#data-types-and-alignment)
+- [System V ABI for the Arm® 64-bit Architecture (AArch64)](https://github.com/ARM-software/abi-aa/blob/daa7a94ca55973736c0e434a67a6e4bbcd35d7fa/sysvabi64/sysvabi64.rst#get-the-value-of-a-symbol-defined-in-the-same-elf-file)
+- https://airbus-seclab.github.io/qemu_blog/tcg_p1.html
+- https://github.com/sunfishcode/wasm-reference-manual/blob/master/WebAssembly.md
+- https://armasm.com/
+- https://github.com/WebAssembly/binaryen/wiki/Compiling-to-WebAssembly-with-Binaryen#cfg-api
+- https://en.wikipedia.org/wiki/Control-flow_graph#Reducibility
