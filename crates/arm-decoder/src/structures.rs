@@ -1,3 +1,5 @@
+use crate::utilities::{decode_bool, get_bits, sign_extend};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Register {
     X0,
@@ -36,7 +38,7 @@ pub enum Register {
 }
 
 impl Register {
-    fn decode(value: u32, zero_mode: bool) -> Self {
+    fn decode(value: u32, sp_mode: bool) -> Self {
         use Register::*;
 
         match value {
@@ -72,10 +74,10 @@ impl Register {
             29 => X29,
             30 => X30,
             31 => {
-                if zero_mode {
-                    XZR
-                } else {
+                if sp_mode {
                     SP
+                } else {
+                    XZR
                 }
             }
             _ => panic!("invalid register encoding: {value}"),
@@ -105,7 +107,7 @@ pub enum AddressingMode {
 impl AddressingMode {
     pub fn access_offset(&self) -> i32 {
         match self {
-            AddressingMode::PostIndexWithWriteback { offset } => 0,
+            AddressingMode::PostIndexWithWriteback { offset: _ } => 0,
             AddressingMode::PreIndex { offset } => *offset,
             AddressingMode::PreIndexWithWriteback { offset } => *offset,
         }
@@ -114,20 +116,20 @@ impl AddressingMode {
     pub fn writeback_offset(&self) -> Option<i32> {
         match self {
             AddressingMode::PostIndexWithWriteback { offset } => Some(*offset),
-            AddressingMode::PreIndex { .. } => None,
+            AddressingMode::PreIndex { offset: _ } => None,
             AddressingMode::PreIndexWithWriteback { offset } => Some(*offset),
         }
     }
 }
 
-struct InstructionBytes(u32);
+pub struct InstructionBytes(pub u32);
 
 impl InstructionBytes {
-    fn bool(&self, start: u32) -> bool {
+    pub fn bool(&self, start: u32) -> bool {
         decode_bool(self.0, start)
     }
 
-    fn immediate(&self, start: u32, size: u32, signed: bool) -> i32 {
+    pub fn immediate(&self, start: u32, size: u32, signed: bool) -> i32 {
         let value = get_bits(self.0, start, size);
 
         if signed {
@@ -137,15 +139,15 @@ impl InstructionBytes {
         }
     }
 
-    fn immediate_unsigned(&self, start: u32, size: u32) -> u32 {
+    pub fn immediate_unsigned(&self, start: u32, size: u32) -> u32 {
         get_bits(self.0, start, size)
     }
 
-    fn register(&self, start: u32, zero_mode: bool) -> Register {
-        Register::decode(get_bits(self.0, start, 5), zero_mode)
+    pub fn register(&self, start: u32, sp_mode: bool) -> Register {
+        Register::decode(get_bits(self.0, start, 5), sp_mode)
     }
 
-    fn variant(&self) -> SizeVariant {
+    pub fn variant(&self) -> SizeVariant {
         if decode_bool(self.0, 31) {
             SizeVariant::Reg64
         } else {
@@ -163,7 +165,7 @@ pub enum Shift {
 }
 
 impl Shift {
-    fn decode(value: u32, allow_ror: bool) -> Self {
+    pub fn decode(value: u32, allow_ror: bool) -> Self {
         match value {
             0b00 => Shift::LSL,
             0b01 => Shift::LSR,
@@ -181,7 +183,7 @@ impl Shift {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SliceSize {
+pub enum SliceSize {
     Byte,
     Halfword,
     Word,
@@ -189,7 +191,7 @@ enum SliceSize {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Extension {
-    size: SliceSize,
-    signed: bool,
+pub struct Extension {
+    pub size: SliceSize,
+    pub signed: bool,
 }

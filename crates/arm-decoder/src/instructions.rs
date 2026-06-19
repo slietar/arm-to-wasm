@@ -1,46 +1,58 @@
+use crate::structures::{Extension, Register, Shift, SizeVariant, SliceSize};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MoveMode {
+pub enum MoveMode {
     Keep,
     Not,
     Zero, // Not valid in 64-bit mode
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LogicalOp {
+pub enum LogicalOp {
     And { set_flags: bool },
     Or,
     Xor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AddSubtractOp {
+pub enum AddSubtractOp {
     Add,
     Subtract,
 }
 
+impl AddSubtractOp {
+    pub fn from_bool(value: bool) -> Self {
+        if value {
+            AddSubtractOp::Subtract
+        } else {
+            AddSubtractOp::Add
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum AddSubtractRightOperand {
+pub enum AddSubtractRightOperand {
     Immediate(u64),
     ShiftedRegister {
         register: Register,
         shift_amount: u64,
-        shift_type: ShiftType,
+        shift_type: Shift,
     },
     ExtendedRegister {
-        register: Register,
         extension: Extension,
-        shift_amount: u64,
+        left_shift_amount: u64,
+        register: Register,
     },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoadStoreOp {
+pub enum LoadStoreOp {
     Load { sign_extend: bool },
     Store,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum LoadStoreOffset {
+pub enum LoadStoreOffset {
     Immediate(u64),
     Register {
         register: Register,
@@ -50,7 +62,7 @@ enum LoadStoreOffset {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConditionalSelectMode {
+pub enum ConditionalSelectMode {
     Identity,
     Increment,
     Invert,
@@ -58,7 +70,7 @@ enum ConditionalSelectMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Instruction {
+pub enum Instruction {
     // ADD, ADDS, SUB, SUBS
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Immediate?lang=en#addsub_imm
     AddSubtract {
@@ -106,7 +118,7 @@ enum Instruction {
         operand1: Register,
         operand2: Register,
         shift_amount: u64,
-        shift_type: ShiftType,
+        shift_type: Shift,
         variant: SizeVariant,
     },
 
@@ -134,11 +146,11 @@ enum Instruction {
     // CSEL, CSINC, CSINV, CSNEG
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Register?lang=en#condsel
     ConditionalSelect {
-        condition: Condition,
+        // condition: Condition,
         destination: Register,
         op: ConditionalSelectMode,
         operand1: Register,
         operand2: Register,
         variant: SizeVariant,
-    }
+    },
 }
