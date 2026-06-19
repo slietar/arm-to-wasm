@@ -1,12 +1,7 @@
-[package]
-name = "reboot"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-binaryen = { path = "../binaryen-rs" }
-capstone = "0.14.0"
-clap = { version = "4.6.1", features = ["cargo", "derive"] }
-disarm64 = "0.1.26"
-elf = "0.8.0"
-rayon = "1.12.0"
+[workspace]
+resolver = "3"
+members = [
+    "crates/arm-decoder",
+    "crates/core",
+    "crates/runtime",
+]
