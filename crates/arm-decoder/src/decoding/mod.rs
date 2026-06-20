@@ -1,1 +1,2 @@
-mod addsub;
+pub mod addsub;
+pub mod logical;

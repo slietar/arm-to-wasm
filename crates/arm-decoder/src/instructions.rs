@@ -14,6 +14,18 @@ pub enum LogicalOp {
     Xor,
 }
 
+impl LogicalOp {
+    pub fn decode(value: u32) -> Self {
+        match value {
+            0b00 => LogicalOp::And { set_flags: false },
+            0b01 => LogicalOp::Or,
+            0b10 => LogicalOp::Xor,
+            0b11 => LogicalOp::And { set_flags: true },
+            _ => panic!("invalid logical op encoding: {value}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddSubtractOp {
     Add,
@@ -103,9 +115,8 @@ pub enum Instruction {
     LogicalImmediate {
         destination: Register,
         op: LogicalOp,
-        bitmask_immediate: u64,
-        source: Register,
-        value: u64,
+        operand1: Register,
+        operand2: u64,
         variant: SizeVariant,
     },
 
