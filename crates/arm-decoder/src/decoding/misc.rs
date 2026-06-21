@@ -1,4 +1,8 @@
-use crate::{instructions::Instruction, structures::InstructionBytes, utilities::equal_masked};
+use crate::{
+    instructions::Instruction,
+    structures::InstructionBytes,
+    utilities::{equal_masked, sign_extend},
+};
 
 pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
     // BRK
@@ -51,6 +55,22 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         });
     }
 
+    // ADR, ADRP
+    // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Immediate?lang=en#pcreladdr
+    if equal_masked(
+        bytes.0,
+        0b1001_1111_0000_0000_0000_0000_0000_0000,
+        0b0001_0000_0000_0000_0000_0000_0000_0000,
+    ) {
+        return Some(Instruction::FormPCRelativeAddress {
+            aligned_to_page: bytes.bool(31),
+            destination: bytes.register(0, false),
+            value: sign_extend(
+                (bytes.immediate_unsigned(5, 19) << 2) | bytes.immediate_unsigned(29, 2),
+                21,
+            ) as i64,
+        });
+    }
 
     None
 }
