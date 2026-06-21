@@ -176,7 +176,7 @@ pub enum Instruction {
     // CSEL, CSINC, CSINV, CSNEG
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Register?lang=en#condsel
     ConditionalSelect {
-        // condition: Condition,
+        condition: Condition,
         destination: Register,
         op: ConditionalSelectMode,
         operand1: Register,

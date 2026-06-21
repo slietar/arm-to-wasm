@@ -254,26 +254,26 @@ pub enum Promotion {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Condition {
-    EQ,
-    NE,
-    CS,
-    CC,
-    MI,
-    PL,
-    VS,
-    VC,
-    HI,
-    LS,
-    GE,
-    LT,
-    GT,
-    LE,
-    AL,
-    NV,
+    EQ, // Equal
+    NE, // Not equal
+    CS, // Carry set
+    CC, // Carry clear
+    MI, // Minus
+    PL, // Plus
+    VS, // Overflow
+    VC, // No overflow
+    HI, // Unsigned higher
+    LS, // Unsigned lower or same
+    GE, // Signed greater than or equal
+    LT, // Signed less than
+    GT, // Signed greater than
+    LE, // Signed less than or equal
+    AL, // Always
+    NV, // Never (unpredictable)
 }
 
 impl Condition {
-    pub fn decode(value: u32) -> Self {
+    pub fn decode(value: u32, allow_al_and_nv: bool) -> Self {
         match value {
             0b0000 => Condition::EQ,
             0b0001 => Condition::NE,
@@ -289,8 +289,20 @@ impl Condition {
             0b1011 => Condition::LT,
             0b1100 => Condition::GT,
             0b1101 => Condition::LE,
-            0b1110 => Condition::AL,
-            0b1111 => Condition::NV,
+            0b1110 => {
+                if !allow_al_and_nv {
+                    panic!()
+                }
+
+                Condition::AL
+            }
+            0b1111 => {
+                if !allow_al_and_nv {
+                    panic!()
+                }
+
+                Condition::NV
+            }
             _ => unreachable!(),
         }
     }

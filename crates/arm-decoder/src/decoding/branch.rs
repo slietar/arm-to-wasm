@@ -39,7 +39,7 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         0b0101_0100_0000_0000_0000_0000_0000_0000,
     ) {
         return Some(Instruction::BranchConditionally {
-            condition: Condition::decode(bytes.immediate_unsigned(0, 4)),
+            condition: Condition::decode(bytes.immediate_unsigned(0, 4), true),
             target: bytes.immediate(5, 19, true) as i64,
         });
     }

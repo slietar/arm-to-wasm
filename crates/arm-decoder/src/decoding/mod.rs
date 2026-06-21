@@ -8,6 +8,7 @@ mod loadstore_pair;
 mod logical;
 mod misc;
 mod movewide;
+mod select;
 
 pub fn decode(value: u32) -> Instruction {
     let bytes = InstructionBytes(value);
@@ -27,6 +28,8 @@ pub fn decode(value: u32) -> Instruction {
     } else if let Some(instruction) = misc::decode(bytes) {
         instruction
     } else if let Some(instruction) = movewide::decode(bytes) {
+        instruction
+    } else if let Some(instruction) = select::decode(bytes) {
         instruction
     } else {
         Instruction::Unknown
