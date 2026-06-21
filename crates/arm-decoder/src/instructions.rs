@@ -181,5 +181,18 @@ pub enum Instruction {
     // PRFM
     PrefetchMemory,
 
+    // NOP
+    Nop,
+
+    // SVC
+    SupervisorCall {
+        argument: u16,
+    },
+
+    // RET
+    Return {
+        target: Register,
+    },
+
     Unknown,
 }
