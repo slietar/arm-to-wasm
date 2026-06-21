@@ -71,5 +71,28 @@ fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         });
     }
 
+    // Load literal
+    // Enforcing VR = 0
+    if equal_masked(
+        bytes.0,
+        0b0011_1111_0000_0000_0000_0000_0000_0000,
+        0b0001_1000_0000_0000_0000_0000_0000_0000,
+    ) {
+        let (size, sign_extend) = match bytes.immediate_unsigned(30, 2) {
+            0b00 => (SliceSize::Word, false),
+            0b01 => (SliceSize::Doubleword, false), // Sign extension has no effect on 64-bit loads
+            0b10 => (SliceSize::Word, true),
+            0b11 => return Some(Instruction::PrefetchMemory),
+            _ => unreachable!(),
+        };
+
+        return Some(Instruction::LoadLiteral {
+            destination: bytes.register(0, false),
+            relative_instruction_offset: bytes.immediate(5, 19, true) as i64,
+            sign_extend,
+            size,
+        });
+    }
+
     None
 }

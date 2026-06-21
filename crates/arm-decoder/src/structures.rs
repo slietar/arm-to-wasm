@@ -223,6 +223,16 @@ pub enum Transform {
 }
 
 impl Extension {
+    pub const UXTB: Extension = Extension {
+        size: SliceSize::Byte,
+        signed: false,
+    };
+
+    pub const SXTB: Extension = Extension {
+        size: SliceSize::Byte,
+        signed: true,
+    };
+
     pub const UXTW: Extension = Extension {
         size: SliceSize::Word,
         signed: false,

@@ -159,8 +159,8 @@ pub enum Instruction {
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Loads-and-Stores?lang=en#loadlit
     LoadLiteral {
         destination: Register,
-        extension: Extension,
         relative_instruction_offset: i64,
+        sign_extend: bool,
         size: SliceSize,
     },
 
@@ -174,4 +174,7 @@ pub enum Instruction {
         operand2: Register,
         variant: SizeVariant,
     },
+
+    // PRFM
+    PrefetchMemory,
 }
