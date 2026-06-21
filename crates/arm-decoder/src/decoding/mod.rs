@@ -1,6 +1,7 @@
 use crate::{instructions::Instruction, structures::InstructionBytes};
 
 mod addsub;
+mod bitfield;
 mod branch;
 mod loadstore;
 mod logical;
@@ -11,6 +12,8 @@ pub fn decode(value: u32) -> Instruction {
     let bytes = InstructionBytes(value);
 
     if let Some(instruction) = addsub::decode(bytes) {
+        instruction
+    } else if let Some(instruction) = bitfield::decode(bytes) {
         instruction
     } else if let Some(instruction) = branch::decode(bytes) {
         instruction

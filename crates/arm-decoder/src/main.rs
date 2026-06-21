@@ -89,8 +89,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let address =
                         section_header.sh_addr + ((instruction_index as u64) * INSTRUCTION_SIZE);
 
-                    print!("[{:#010x}]", address);
-
                     let disassembled = disassembler.disasm_all(instruction_bytes, address).unwrap();
 
                     let capstone_instruction = disassembled.iter().next().unwrap();
@@ -101,12 +99,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .entry(mnemonic.to_string())
                             .and_modify(|count| *count += 1)
                             .or_insert(1);
+
+                        print!("[{:#010x}]", address);
+                        println!(" {} {}", mnemonic, capstone_instruction.op_str().unwrap(),);
+
+                        println!("    {:032b}", instruction_value);
+                        println!("    {:?}", instruction);
                     }
-
-                    println!(" {} {}", mnemonic, capstone_instruction.op_str().unwrap(),);
-
-                    println!("    {:032b}", instruction_value);
-                    println!("    {:?}", instruction);
                 }
             }
         }
@@ -118,9 +117,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     unknown_counts.sort_by_key(|(_, count)| *count);
 
-    for (mnemonic, count) in unknown_counts {
+    for (mnemonic, count) in &unknown_counts {
         eprintln!("  {:<8} {}", mnemonic, count);
     }
+
+    eprintln!("  {:<8} {}", "Total", unknown_counts.iter().map(|(_, count)| *count).sum::<usize>());
 
     Ok(())
 }

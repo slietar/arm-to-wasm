@@ -83,6 +83,13 @@ pub enum BranchTarget {
     Register(Register),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitfieldMoveMode {
+    Default,
+    Signed,
+    Unsigned,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     // ADD, ADDS, SUB, SUBS
@@ -134,16 +141,6 @@ pub enum Instruction {
         variant: SizeVariant,
     },
 
-    // SBFM
-    // https://developer.arm.com/documentation/dui0802/b/A64-General-Instructions/SBFM?lang=en
-    SignedBitfieldMove {
-        bit_count: u64,
-        destination: Register,
-        rotate_amount: u64,
-        source: Register,
-        variant: SizeVariant,
-    },
-
     // STRB, LDRB, LDRSB, STRH, LDRH, LDRSH, STR, LDR, LDRSW
     // STURB, LDURB, LDURSB, STURH, LDURH, LDURSH, STUR, LDUR, LDURSW
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Loads-and-Stores?lang=en#ldst_regoff
@@ -173,6 +170,17 @@ pub enum Instruction {
         op: ConditionalSelectMode,
         operand1: Register,
         operand2: Register,
+        variant: SizeVariant,
+    },
+
+    // SBFM, BFM, UBFM
+    // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Immediate?lang=en#bitfield
+    BitfieldMove {
+        destination: Register,
+        leftmost_bit_number: u32,
+        mode: BitfieldMoveMode,
+        right_rotate_amount: u32,
+        source: Register,
         variant: SizeVariant,
     },
 
