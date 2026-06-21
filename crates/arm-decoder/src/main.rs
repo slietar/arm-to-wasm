@@ -6,7 +6,7 @@ mod structures;
 mod utilities;
 
 use crate::{
-    decoding::{decode, logical::decode_bitmask},
+    decoding::decode,
     instructions::Instruction,
 };
 use capstone::arch::BuildsCapstone as _;

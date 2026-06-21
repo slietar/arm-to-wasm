@@ -235,3 +235,47 @@ pub enum Promotion {
     P32 { sign_extend: bool },
     P64,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Condition {
+    EQ,
+    NE,
+    CS,
+    CC,
+    MI,
+    PL,
+    VS,
+    VC,
+    HI,
+    LS,
+    GE,
+    LT,
+    GT,
+    LE,
+    AL,
+    NV,
+}
+
+impl Condition {
+    pub fn decode(value: u32) -> Self {
+        match value {
+            0b0000 => Condition::EQ,
+            0b0001 => Condition::NE,
+            0b0010 => Condition::CS,
+            0b0011 => Condition::CC,
+            0b0100 => Condition::MI,
+            0b0101 => Condition::PL,
+            0b0110 => Condition::VS,
+            0b0111 => Condition::VC,
+            0b1000 => Condition::HI,
+            0b1001 => Condition::LS,
+            0b1010 => Condition::GE,
+            0b1011 => Condition::LT,
+            0b1100 => Condition::GT,
+            0b1101 => Condition::LE,
+            0b1110 => Condition::AL,
+            0b1111 => Condition::NV,
+            _ => unreachable!(),
+        }
+    }
+}

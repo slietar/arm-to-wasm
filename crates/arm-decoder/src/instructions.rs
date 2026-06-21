@@ -1,4 +1,4 @@
-use crate::structures::{WritebackOffset, Extension, Register, Shift, SizeVariant, SliceSize, Transform};
+use crate::structures::{Condition, Extension, Register, Shift, SizeVariant, SliceSize, Transform, WritebackOffset};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveMode {
@@ -82,6 +82,12 @@ pub enum ConditionalSelectMode {
     Increment,
     Invert,
     Negate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchTarget {
+    RelativeInstructionOffset(i64),
+    Register(Register),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +198,18 @@ pub enum Instruction {
     // RET
     Return {
         target: Register,
+    },
+
+    // B, BR, BL, BLR
+    UnconditionalBranch {
+        link: bool,
+        target: BranchTarget,
+    },
+
+    // B.cond
+    BranchConditionally {
+        condition: Condition,
+        target: i64,
     },
 
     Unknown,
