@@ -75,7 +75,7 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
     let is_unsigned_immediate = equal_masked(
         bytes.0,
         0b0011_1111_0000_0000_0000_0000_0000_0000,
-        0b0011_1010_0000_0000_0000_0000_0000_0000,
+        0b0011_1001_0000_0000_0000_0000_0000_0000,
     );
 
     // Immediate

@@ -8,8 +8,8 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
     // Immediate
     if equal_masked(
         bytes.0,
-        0b0001_1111_1100_0000_0000_0000_0000_000,
-        0b0001_0010_0000_0000_0000_0000_0000_000,
+        0b0001_1111_1000_0000_0000_0000_0000_0000,
+        0b0001_0010_0000_0000_0000_0000_0000_0000,
     ) {
         let variant = bytes.variant();
         let is_pattern_double = bytes.bool(22);
@@ -23,7 +23,7 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
             op: LogicalOp::decode(bytes.immediate_unsigned(29, 2)),
             operand1: bytes.register(5, false),
             operand2: decode_bitmask(
-                bytes.bool(22),
+                is_pattern_double,
                 bytes.immediate_unsigned(16, 6),
                 bytes.immediate_unsigned(10, 6),
                 variant,
@@ -35,8 +35,8 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
     // Shifted register
     if equal_masked(
         bytes.0,
-        0b0001_1111_0000_0000_0000_0000_0000_000,
-        0b0000_1010_0000_0000_0000_0000_0000_000,
+        0b0001_1111_0000_0000_0000_0000_0000_0000,
+        0b0000_1010_0000_0000_0000_0000_0000_0000,
     ) {
         let shift_amount = bytes.immediate_unsigned(10, 6) as u64;
         let variant = bytes.variant();

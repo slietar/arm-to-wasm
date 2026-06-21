@@ -5,14 +5,19 @@ mod instructions;
 mod structures;
 mod utilities;
 
-use std::{collections::HashMap, time::Instant};
+use crate::{
+    decoding::{decode, logical::decode_bitmask},
+    instructions::Instruction,
+};
 use capstone::arch::BuildsCapstone as _;
-use crate::{decoding::{decode, logical::decode_bitmask}, instructions::Instruction};
+use std::{collections::HashMap, time::Instant};
 
 const INSTRUCTION_SIZE: u64 = 4;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let arg = std::env::args().nth(1).expect("Please provide an ELF file path as an argument.");
+    let arg = std::env::args()
+        .nth(1)
+        .expect("Please provide an ELF file path as an argument.");
 
     let elf_bytes = std::fs::read(&arg).expect("Could not read file.");
     let elf_file = elf::ElfBytes::<elf::endian::AnyEndian>::minimal_parse(&elf_bytes)?;
@@ -50,10 +55,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             u32::from_le_bytes(instruction_bytes.try_into().unwrap());
 
                         decode(instruction_value)
-                    });
+                    })
+                    // .take(5)
+                    .collect::<Vec<_>>();
 
                 let unknown_count = instructions
-                    .clone()
+                    .iter()
                     .filter(|instruction| matches!(instruction, Instruction::Unknown))
                     .count();
 
@@ -70,9 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // unknown_counts.insert("foo".to_string(), unknown_count);
 
-                for (instruction_index, instruction) in
-                    instructions.collect::<Vec<_>>().into_iter().enumerate()
-                {
+                for (instruction_index, _) in instructions.iter().enumerate() {
                     let offset =
                         section_header.sh_offset + ((instruction_index as u64) * INSTRUCTION_SIZE);
                     let instruction_bytes =
@@ -84,25 +89,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let address =
                         section_header.sh_addr + ((instruction_index as u64) * INSTRUCTION_SIZE);
 
-                    print!("  [{:#010x}]", address);
+                    print!("[{:#010x}]", address);
 
-                    let disassembled =
-                        disassembler.disasm_all(instruction_bytes, address).unwrap();
+                    let disassembled = disassembler.disasm_all(instruction_bytes, address).unwrap();
 
                     let capstone_instruction = disassembled.iter().next().unwrap();
                     let mnemonic = capstone_instruction.mnemonic().unwrap();
 
-                    unknown_counts
-                        .entry(mnemonic.to_string())
-                        .and_modify(|count| *count += 1)
-                        .or_insert(1);
+                    if let Instruction::Unknown = instruction {
+                        unknown_counts
+                            .entry(mnemonic.to_string())
+                            .and_modify(|count| *count += 1)
+                            .or_insert(1);
+                    }
 
-                    println!(
-                        " {} {}",
-                        mnemonic,
-                        capstone_instruction.op_str().unwrap(),
-                    );
+                    println!(" {} {}", mnemonic, capstone_instruction.op_str().unwrap(),);
 
+                    println!("    {:032b}", instruction_value);
                     println!("    {:?}", instruction);
                 }
             }
