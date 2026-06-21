@@ -1,52 +1,53 @@
 use crate::{
     instructions::{Instruction, LoadStoreOffset, LoadStoreOp},
-    structures::{Extension, InstructionBytes, SizeVariant, SliceSize, Transform},
+    structures::{Extension, InstructionBytes, SizeVariant, SliceSize, Transform, WritebackOffset},
     utilities::equal_masked,
 };
 
 fn decode(bytes: InstructionBytes) -> Option<Instruction> {
+    // Not handling SIMD load/store so enforcing VR = 0 everywhere
+
+    let get_size = || match bytes.immediate_unsigned(30, 2) {
+        0b00 => SliceSize::Byte,
+        0b01 => SliceSize::Halfword,
+        0b10 => SliceSize::Word,
+        0b11 => SliceSize::Doubleword,
+        _ => unreachable!(),
+    };
+
+    let get_op = |size| match bytes.immediate_unsigned(22, 2) {
+        0b00 => LoadStoreOp::Store,
+        0b01 => LoadStoreOp::LoadZeroExtend,
+
+        0b10 => {
+            if matches!(size, SliceSize::Doubleword) {
+                panic!();
+            }
+
+            LoadStoreOp::LoadSignExtend {
+                variant: SizeVariant::Reg64,
+            }
+        }
+        0b11 => {
+            // TODO: Handle RPRFM and PRFM
+            if matches!(size, SliceSize::Word | SliceSize::Doubleword) {
+                panic!();
+            }
+
+            LoadStoreOp::LoadSignExtend {
+                variant: SizeVariant::Reg32,
+            }
+        }
+        _ => unreachable!(),
+    };
+
     // Register offset
-    // Not handling SIMD load/store so enforcing VR = 0
     if equal_masked(
         bytes.0,
         0b0011_1111_0010_0000_0000_1100_0000_0000,
         0b0011_1000_0010_0000_0000_1000_0000_0000,
     ) {
-        let size = match bytes.immediate_unsigned(30, 2) {
-            0b00 => SliceSize::Byte,
-            0b01 => SliceSize::Halfword,
-            0b10 => SliceSize::Word,
-            0b11 => SliceSize::Doubleword,
-            _ => unreachable!(),
-        };
-
-        let option = bytes.immediate_unsigned(13, 3);
-
-        let op = match bytes.immediate_unsigned(22, 2) {
-            0b00 => LoadStoreOp::Store,
-            0b01 => LoadStoreOp::LoadZeroExtend,
-
-            0b10 => {
-                if matches!(size, SliceSize::Doubleword) {
-                    panic!();
-                }
-
-                LoadStoreOp::LoadSignExtend {
-                    variant: SizeVariant::Reg64,
-                }
-            }
-            0b11 => {
-                // TODO: Handle RPRFM and PRFM
-                if matches!(size, SliceSize::Word | SliceSize::Doubleword) {
-                    panic!();
-                }
-
-                LoadStoreOp::LoadSignExtend {
-                    variant: SizeVariant::Reg32,
-                }
-            }
-            _ => unreachable!(),
-        };
+        let size = get_size();
 
         return Some(Instruction::LoadStoreRegister {
             address: bytes.register(5, true),
@@ -65,14 +66,68 @@ fn decode(bytes: InstructionBytes) -> Option<Instruction> {
                     0
                 },
             },
-            op,
+            op: get_op(size),
+            size,
+            value: bytes.register(0, false),
+        });
+    }
+
+    let is_unsigned_immediate = equal_masked(
+        bytes.0,
+        0b0011_1111_0000_0000_0000_0000_0000_0000,
+        0b0011_1010_0000_0000_0000_0000_0000_0000,
+    );
+
+    // Immediate
+    if equal_masked(
+        bytes.0,
+        0b0011_1111_0010_0000_0000_0000_0000_0000,
+        0b0011_1000_0000_0000_0000_0000_0000_0000,
+    ) || is_unsigned_immediate {
+        let size = get_size();
+        let offset = if is_unsigned_immediate {
+            (bytes.immediate_unsigned(10, 12) << size.log_byte_count()) as i32
+        } else {
+            bytes.immediate(12, 9, true)
+        };
+
+        return Some(Instruction::LoadStoreRegister {
+            address: bytes.register(5, true),
+            offset: LoadStoreOffset::Immediate {
+                offset: match bytes.immediate_unsigned(10, 2) {
+                    // Unsigned immediate
+                    _ if is_unsigned_immediate => WritebackOffset {
+                        access: offset,
+                        writeback: None,
+                    },
+
+                    // Unscaled immediate
+                    0b00 => WritebackOffset {
+                        access: offset,
+                        writeback: None,
+                    },
+
+                    // Post index with writeback
+                    0b01 => WritebackOffset {
+                        access: 0,
+                        writeback: Some(offset),
+                    },
+
+                    // Pre index with writeback
+                    0b11 => WritebackOffset {
+                        access: offset,
+                        writeback: Some(offset),
+                    },
+                    _ => unreachable!(),
+                },
+            },
+            op: get_op(size),
             size,
             value: bytes.register(0, false),
         });
     }
 
     // Load literal
-    // Enforcing VR = 0
     if equal_masked(
         bytes.0,
         0b0011_1111_0000_0000_0000_0000_0000_0000,

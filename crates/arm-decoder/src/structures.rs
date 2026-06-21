@@ -91,35 +91,10 @@ pub enum SizeVariant {
     Reg64,
 }
 
-#[derive(Debug, Clone)]
-pub struct Address {
-    pub base: Register,
-    pub mode: AddressingMode,
-}
-
-#[derive(Debug, Clone)]
-pub enum AddressingMode {
-    PostIndexWithWriteback { offset: i32 },
-    PreIndex { offset: i32 },
-    PreIndexWithWriteback { offset: i32 },
-}
-
-impl AddressingMode {
-    pub fn access_offset(&self) -> i32 {
-        match self {
-            AddressingMode::PostIndexWithWriteback { offset: _ } => 0,
-            AddressingMode::PreIndex { offset } => *offset,
-            AddressingMode::PreIndexWithWriteback { offset } => *offset,
-        }
-    }
-
-    pub fn writeback_offset(&self) -> Option<i32> {
-        match self {
-            AddressingMode::PostIndexWithWriteback { offset } => Some(*offset),
-            AddressingMode::PreIndex { offset: _ } => None,
-            AddressingMode::PreIndexWithWriteback { offset } => Some(*offset),
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WritebackOffset {
+    pub access: i32,
+    pub writeback: Option<i32>,
 }
 
 pub struct InstructionBytes(pub u32);
@@ -252,4 +227,10 @@ impl Extension {
         size: SliceSize::Doubleword,
         signed: false,
     };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Promotion {
+    P32 { sign_extend: bool },
+    P64,
 }

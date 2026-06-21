@@ -1,4 +1,4 @@
-use crate::structures::{Extension, Register, Shift, SizeVariant, SliceSize, Transform};
+use crate::structures::{WritebackOffset, Extension, Register, Shift, SizeVariant, SliceSize, Transform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveMode {
@@ -66,7 +66,9 @@ pub enum LoadStoreOp {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadStoreOffset {
-    Immediate(u64),
+    Immediate {
+        offset: WritebackOffset,
+    },
     Register {
         extension: Option<Extension>,
         register: Register,
@@ -144,7 +146,8 @@ pub enum Instruction {
         variant: SizeVariant,
     },
 
-    // STRB, LDRB, LDRSB, STRH, LDRH, LDRSH, STR, LDR
+    // STRB, LDRB, LDRSB, STRH, LDRH, LDRSH, STR, LDR, LDRSW
+    // STURB, LDURB, LDURSB, STURH, LDURH, LDURSH, STUR, LDUR, LDURSW
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Loads-and-Stores?lang=en#ldst_regoff
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Loads-and-Stores?lang=en#ldst_pos
     LoadStoreRegister {
