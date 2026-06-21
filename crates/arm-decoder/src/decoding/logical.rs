@@ -24,8 +24,8 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
             operand1: bytes.register(5, false),
             operand2: decode_bitmask(
                 is_pattern_double,
-                bytes.immediate_unsigned(16, 6),
                 bytes.immediate_unsigned(10, 6),
+                bytes.immediate_unsigned(16, 6),
                 variant,
             ),
             variant,

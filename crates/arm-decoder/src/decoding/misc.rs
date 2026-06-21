@@ -59,7 +59,7 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Immediate?lang=en#pcreladdr
     if equal_masked(
         bytes.0,
-        0b1001_1111_0000_0000_0000_0000_0000_0000,
+        0b0001_1111_0000_0000_0000_0000_0000_0000,
         0b0001_0000_0000_0000_0000_0000_0000_0000,
     ) {
         return Some(Instruction::FormPCRelativeAddress {

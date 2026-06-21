@@ -22,7 +22,7 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Branches--Exception-Generating-and-System-instructions?lang=en#branch_reg
     if equal_masked(
         bytes.0,
-        0b0111_1111_1101_1111_1111_1100_0001_1111,
+        0b1111_1111_1101_1111_1111_1100_0001_1111,
         0b1101_0110_0001_1111_0000_0000_0000_0000,
     ) {
         return Some(Instruction::UnconditionalBranch {
