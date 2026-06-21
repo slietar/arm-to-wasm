@@ -1,13 +1,6 @@
 use crate::structures::{Condition, Extension, Register, Shift, SizeVariant, SliceSize, Transform, WritebackOffset};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MoveMode {
-    Keep,
-    Not,
-    Zero, // Not valid in 64-bit mode
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogicalOp {
     And { set_flags: bool },
     Or,
@@ -113,8 +106,7 @@ pub enum Instruction {
     // MOVN, MOVZ, MOVK
     MoveWide {
         destination: Register,
-        mode: MoveMode,
-        shift: u64,
+        keep_shift: Option<u32>,
         source: Register,
         value: u64,
         variant: SizeVariant,
