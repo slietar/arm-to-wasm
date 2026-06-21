@@ -195,6 +195,11 @@ pub enum Instruction {
     // NOP
     Nop,
 
+    // UDF
+    PermanentlyUndefined {
+        immediate: u16,
+    },
+
     // SVC
     SupervisorCall {
         argument: u16,

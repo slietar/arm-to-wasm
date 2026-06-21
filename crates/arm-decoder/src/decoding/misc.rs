@@ -72,5 +72,17 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         });
     }
 
+    // UDF
+    // https://developer.arm.com/documentation/ddi0602/2021-12/Base-Instructions/UDF--Permanently-Undefined-?lang=en
+    if equal_masked(
+        bytes.0,
+        0b1111_1111_1111_1111_0000_0000_0000_0000,
+        0b0000_0000_0000_0000_0000_0000_0000_0000,
+    ) {
+        return Some(Instruction::PermanentlyUndefined {
+            immediate: bytes.immediate_unsigned(0, 16) as u16,
+        });
+    }
+
     None
 }
