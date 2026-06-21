@@ -5,10 +5,7 @@ mod instructions;
 mod structures;
 mod utilities;
 
-use crate::{
-    decoding::decode,
-    instructions::Instruction,
-};
+use crate::{decoding::decode, instructions::Instruction};
 use capstone::arch::BuildsCapstone as _;
 use std::{collections::HashMap, time::Instant};
 
@@ -30,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .unwrap();
 
-    let mut unknown_counts = HashMap::new();
+    let mut counts = HashMap::new();
 
     if let Some(section_headers) = section_headers_opt {
         for section_header in section_headers {
@@ -94,15 +91,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let capstone_instruction = disassembled.iter().next().unwrap();
                     let mnemonic = capstone_instruction.mnemonic().unwrap();
 
-                    if let Instruction::Unknown = instruction {
-                        unknown_counts
-                            .entry(mnemonic.to_string())
-                            .and_modify(|count| *count += 1)
-                            .or_insert(1);
-                    }
+                    let is_unknown = matches!(instruction, Instruction::Unknown);
 
-                    if true {
-                    // if let Instruction::Unknown = instruction {
+                    counts
+                        .entry(mnemonic.to_string())
+                        .and_modify(|(known_count, unknown_count)| {
+                            if is_unknown {
+                                *unknown_count += 1;
+                            } else {
+                                *known_count += 1;
+                            }
+                        })
+                        .or_insert((
+                            if is_unknown { 0 } else { 1 },
+                            if is_unknown { 1 } else { 0 },
+                        ));
+
+                    // if true {
+                    if let Instruction::Unknown = instruction {
                         print!("[{:#010x}]", address);
                         println!(" {} {}", mnemonic, capstone_instruction.op_str().unwrap(),);
 
@@ -116,15 +122,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("Unknown instruction counts:");
 
-    let mut unknown_counts = unknown_counts.iter().collect::<Vec<_>>();
+    let mut unknown_counts = counts.iter().collect::<Vec<_>>();
 
-    unknown_counts.sort_by_key(|(_, count)| *count);
+    unknown_counts.sort_by_key(|(_, (known_count, unknown_count))| *unknown_count);
 
-    for (mnemonic, count) in &unknown_counts {
-        eprintln!("  {:<8} {}", mnemonic, count);
+    for (mnemonic, (known_count, unknown_count)) in &unknown_counts {
+        eprintln!("  {:<8} {} / {}", mnemonic, unknown_count, known_count + unknown_count);
     }
 
-    eprintln!("  {:<8} {}", "Total", unknown_counts.iter().map(|(_, count)| *count).sum::<usize>());
+    let total_unknown_count: usize = unknown_counts
+        .iter()
+        .map(|(_, (known_count, unknown_count))| known_count + unknown_count)
+        .sum();
+
+    let total_known_count: usize = unknown_counts
+        .iter()
+        .map(|(_, (known_count, unknown_count))| known_count)
+        .sum();
+
+    eprintln!(
+        "  {:<8} {} / {}",
+        "Total", total_unknown_count, total_known_count + total_unknown_count
+    );
 
     Ok(())
 }
