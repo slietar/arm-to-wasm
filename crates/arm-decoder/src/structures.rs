@@ -91,6 +91,22 @@ pub enum SizeVariant {
     Reg64,
 }
 
+impl SizeVariant {
+    pub fn byte_count(&self) -> u64 {
+        match self {
+            SizeVariant::Reg32 => 4,
+            SizeVariant::Reg64 => 8,
+        }
+    }
+
+    pub fn log_byte_count(&self) -> u64 {
+        match self {
+            SizeVariant::Reg32 => 2,
+            SizeVariant::Reg64 => 3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WritebackOffset {
     pub access: i32,

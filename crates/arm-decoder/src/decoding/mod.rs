@@ -4,6 +4,7 @@ mod addsub;
 mod bitfield;
 mod branch;
 mod loadstore;
+mod loadstore_pair;
 mod logical;
 mod misc;
 mod movewide;
@@ -18,6 +19,8 @@ pub fn decode(value: u32) -> Instruction {
     } else if let Some(instruction) = branch::decode(bytes) {
         instruction
     } else if let Some(instruction) = loadstore::decode(bytes) {
+        instruction
+    } else if let Some(instruction) = loadstore_pair::decode(bytes) {
         instruction
     } else if let Some(instruction) = logical::decode(bytes) {
         instruction

@@ -162,6 +162,17 @@ pub enum Instruction {
         size: SliceSize,
     },
 
+    // STP, LDP, LDPSW
+    LoadStorePairOfRegisters {
+        address: Register,
+        offset: WritebackOffset,
+        op: LoadStoreOp,
+        size: SizeVariant,
+        value1: Register,
+        value2: Register,
+        variant: SizeVariant,
+    },
+
     // CSEL, CSINC, CSINV, CSNEG
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Register?lang=en#condsel
     ConditionalSelect {
