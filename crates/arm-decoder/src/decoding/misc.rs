@@ -1,6 +1,19 @@
 use crate::{instructions::Instruction, structures::InstructionBytes, utilities::equal_masked};
 
 pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
+    // BRK
+    // Breakpoint
+    // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/BRK--Breakpoint-instruction-?lang=en
+    if equal_masked(
+        bytes.0,
+        0b1111_1111_1110_0000_0000_0000_0001_1111,
+        0b1101_0100_0010_0000_0000_0000_0000_0000,
+    ) {
+        return Some(Instruction::Breakpoint {
+            immediate: bytes.immediate_unsigned(5, 16) as u16,
+        });
+    }
+
     // NOP
     // No operation
     // https://developer.arm.com/documentation/ddi0602/2026-03/Base-Instructions/NOP--No-operation-?lang=en

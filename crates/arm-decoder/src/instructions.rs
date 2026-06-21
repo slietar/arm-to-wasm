@@ -184,6 +184,11 @@ pub enum Instruction {
         variant: SizeVariant,
     },
 
+    // BRK
+    Breakpoint {
+        immediate: u16,
+    },
+
     // PRFM
     PrefetchMemory,
 
