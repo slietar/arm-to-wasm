@@ -44,10 +44,24 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         });
     }
 
+    // CBZ, CBNZ
+    if equal_masked(
+        bytes.0,
+        0b0111_1110_0000_0000_0000_0000_0000_0000,
+        0b0011_0100_0000_0000_0000_0000_0000_0000,
+    ) {
+        return Some(Instruction::CompareAndBranch {
+            branch_if_zero: !bytes.bool(24),
+            register: bytes.register(0, false),
+            target: bytes.immediate(5, 19, true) as i64,
+            variant: bytes.variant(),
+        });
+    }
+
     // TBZ, TBNZ
     if equal_masked(
         bytes.0,
-        0b0111_1110_0000_0000_0000_0000_0001_0000,
+        0b0111_1110_0000_0000_0000_0000_0000_0000,
         0b0011_0110_0000_0000_0000_0000_0000_0000,
     ) {
         let variant = bytes.variant();
