@@ -233,5 +233,15 @@ pub enum Instruction {
         target: i64,
     },
 
+    // TBZ, TBNZ
+    // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Branches--Exception-Generating-and-System-instructions?lang=en#testbranch
+    TestBitAndBranch {
+        branch_if_zero: bool,
+        register: Register,
+        target: i64,
+        test_bit: u32,
+        variant: SizeVariant,
+    },
+
     Unknown,
 }

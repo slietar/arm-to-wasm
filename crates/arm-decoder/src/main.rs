@@ -99,7 +99,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .entry(mnemonic.to_string())
                             .and_modify(|count| *count += 1)
                             .or_insert(1);
+                    }
 
+                    if true {
+                    // if let Instruction::Unknown = instruction {
                         print!("[{:#010x}]", address);
                         println!(" {} {}", mnemonic, capstone_instruction.op_str().unwrap(),);
 

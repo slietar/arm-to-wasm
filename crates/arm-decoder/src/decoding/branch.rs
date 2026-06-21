@@ -44,5 +44,27 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         });
     }
 
+    // TBZ, TBNZ
+    if equal_masked(
+        bytes.0,
+        0b0111_1110_0000_0000_0000_0000_0001_0000,
+        0b0011_0110_0000_0000_0000_0000_0000_0000,
+    ) {
+        let variant = bytes.variant();
+        let test_bit = bytes.immediate_unsigned(19, 5);
+
+        if matches!(variant, SizeVariant::Reg32) && test_bit > 31 {
+            panic!();
+        }
+
+        return Some(Instruction::TestBitAndBranch {
+            branch_if_zero: !bytes.bool(24),
+            register: bytes.register(0, false),
+            target: bytes.immediate(5, 14, true) as i64,
+            test_bit,
+            variant,
+        });
+    }
+
     None
 }
