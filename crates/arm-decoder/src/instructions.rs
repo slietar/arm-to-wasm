@@ -1,4 +1,4 @@
-use crate::structures::{Extension, Register, Shift, SizeVariant, SliceSize};
+use crate::structures::{Extension, Register, Shift, SizeVariant, SliceSize, Transform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveMode {
@@ -59,7 +59,8 @@ pub enum AddSubtractRightOperand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadStoreOp {
-    Load { sign_extend: bool },
+    LoadZeroExtend,
+    LoadSignExtend { variant: SizeVariant },
     Store,
 }
 
@@ -67,8 +68,8 @@ pub enum LoadStoreOp {
 pub enum LoadStoreOffset {
     Immediate(u64),
     Register {
+        extension: Option<Extension>,
         register: Register,
-        extension: Extension,
         shift_amount: u64,
     },
 }
@@ -152,6 +153,15 @@ pub enum Instruction {
         op: LoadStoreOp,
         size: SliceSize,
         value: Register,
+    },
+
+    // LDR, LDRSW
+    // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Loads-and-Stores?lang=en#loadlit
+    LoadLiteral {
+        destination: Register,
+        extension: Extension,
+        relative_instruction_offset: i64,
+        size: SliceSize,
     },
 
     // CSEL, CSINC, CSINV, CSNEG

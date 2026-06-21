@@ -190,8 +190,56 @@ pub enum SliceSize {
     Doubleword,
 }
 
+impl SliceSize {
+    pub fn byte_count(&self) -> u64 {
+        match self {
+            SliceSize::Byte => 1,
+            SliceSize::Halfword => 2,
+            SliceSize::Word => 4,
+            SliceSize::Doubleword => 8,
+        }
+    }
+
+    pub fn log_byte_count(&self) -> u64 {
+        match self {
+            SliceSize::Byte => 0,
+            SliceSize::Halfword => 1,
+            SliceSize::Word => 2,
+            SliceSize::Doubleword => 3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Extension {
     pub size: SliceSize,
     pub signed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transform {
+    Extension(Extension),
+    LeftShift,
+}
+
+impl Extension {
+    pub const UXTW: Extension = Extension {
+        size: SliceSize::Word,
+        signed: false,
+    };
+
+    pub const SXTW: Extension = Extension {
+        size: SliceSize::Word,
+        signed: true,
+    };
+
+    pub const SXTX: Extension = Extension {
+        size: SliceSize::Doubleword,
+        signed: true,
+    };
+
+    pub const UXTX: Extension = Extension {
+        size: SliceSize::Doubleword,
+        signed: false,
+    };
 }
