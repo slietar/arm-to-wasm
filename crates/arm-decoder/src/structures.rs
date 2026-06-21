@@ -97,6 +97,7 @@ pub struct WritebackOffset {
     pub writeback: Option<i32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InstructionBytes(pub u32);
 
 impl InstructionBytes {

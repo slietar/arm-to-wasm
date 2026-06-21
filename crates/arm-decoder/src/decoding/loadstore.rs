@@ -4,7 +4,7 @@ use crate::{
     utilities::equal_masked,
 };
 
-fn decode(bytes: InstructionBytes) -> Option<Instruction> {
+pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
     // Not handling SIMD load/store so enforcing VR = 0 everywhere
 
     let get_size = || match bytes.immediate_unsigned(30, 2) {

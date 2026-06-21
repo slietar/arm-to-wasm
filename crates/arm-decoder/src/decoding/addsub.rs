@@ -4,7 +4,7 @@ use crate::{
     utilities::equal_masked,
 };
 
-fn decode(bytes: InstructionBytes) -> Option<Instruction> {
+pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
     // Immediate
     if equal_masked(
         bytes.0,

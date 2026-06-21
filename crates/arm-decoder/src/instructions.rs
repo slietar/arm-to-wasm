@@ -180,4 +180,6 @@ pub enum Instruction {
 
     // PRFM
     PrefetchMemory,
+
+    Unknown,
 }
