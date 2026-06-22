@@ -9,6 +9,7 @@ mod logical;
 mod misc;
 mod movewide;
 mod select;
+mod float;
 
 pub fn decode(value: u32) -> Instruction {
     let bytes = InstructionBytes(value);
@@ -18,6 +19,8 @@ pub fn decode(value: u32) -> Instruction {
     } else if let Some(instruction) = bitfield::decode(bytes) {
         instruction
     } else if let Some(instruction) = branch::decode(bytes) {
+        instruction
+    } else if let Some(instruction) = float::decode(bytes) {
         instruction
     } else if let Some(instruction) = loadstore::decode(bytes) {
         instruction

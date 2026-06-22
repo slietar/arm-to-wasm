@@ -33,12 +33,13 @@ pub enum Register {
     X28,
     X29,
     X30,
+    X31,
     SP,
     XZR,
 }
 
 impl Register {
-    fn decode(value: u32, sp_mode: bool) -> Self {
+    fn decode(value: u32, simd_mode: bool, sp_mode: bool) -> Self {
         use Register::*;
 
         match value {
@@ -74,7 +75,9 @@ impl Register {
             29 => X29,
             30 => X30,
             31 => {
-                if sp_mode {
+                if simd_mode {
+                    X31
+                } else if sp_mode {
                     SP
                 } else {
                     XZR
@@ -136,7 +139,11 @@ impl InstructionBytes {
     }
 
     pub fn register(&self, start: u32, sp_mode: bool) -> Register {
-        Register::decode(get_bits(self.0, start, 5), sp_mode)
+        Register::decode(get_bits(self.0, start, 5), false, sp_mode)
+    }
+
+    pub fn register_simd(&self, start: u32) -> Register {
+        Register::decode(get_bits(self.0, start, 5), false, false)
     }
 
     pub fn variant(&self) -> SizeVariant {
@@ -306,4 +313,31 @@ impl Condition {
             _ => unreachable!(),
         }
     }
+}
+
+
+// https://developer.arm.com/documentation/102374/0103/Registers-in-AArch64---general-purpose-registers
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FPSize {
+    Byte,
+    Half,
+    Single,
+    Double,
+    Quad,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arrangement {
+    B1,
+    H1,
+    S1,
+    D1,
+
+    B8,
+    B16,
+    H4,
+    H8,
+    S2,
+    S4,
+    D2,
 }
