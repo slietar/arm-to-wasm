@@ -91,6 +91,37 @@ pub enum BitfieldMoveMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FPToIntegerRoundingMode {
+    Away,
+    Even,
+    PlusInfinity,
+    MinusInfinity,
+    Zero,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FPMoveDirection {
+    FPToInteger,
+    IntegerToFP,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FPMoveFPSize {
+    Half,
+    Single,
+    LowerDouble,
+    UpperDouble,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvertFPIntegerOp {
+    IntegerToFP,
+    FPToInteger {
+        rounding_mode: FPToIntegerRoundingMode,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FPProcessingOp {
     Multiply, // FMUL
     Divide, // FDIV
@@ -364,6 +395,28 @@ pub enum Instruction {
         target: i64,
         test_bit: u32,
         variant: SizeVariant,
+    },
+
+    // Allowed conversions are (W, X) <-> (S, D, H)
+    ConvertFPInteger {
+        destination: Register,
+        fp_size: FPSize,
+        integer_size: SizeVariant,
+        op: ConvertFPIntegerOp,
+        operand: Register,
+        signed: bool,
+    },
+
+    // Allowed conversions are:
+    //  (W, X) <-> H
+    //  W      <-> S
+    //  X      <-> (D, V.D[1])
+    FPMove {
+        destination: Register,
+        direction: FPMoveDirection,
+        fp_size: FPMoveFPSize,
+        integer_size: SizeVariant,
+        operand: Register,
     },
 
     FPProcessing {

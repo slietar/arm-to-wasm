@@ -107,8 +107,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if is_unknown { 1 } else { 0 },
                         ));
 
-                    // if true {
-                    if let Instruction::Unknown = instruction {
+                    if true {
+                    // if let Instruction::Unknown = instruction {
                         print!("[{:#010x}]", address);
                         println!(" {} {}", mnemonic, capstone_instruction.op_str().unwrap(),);
 
