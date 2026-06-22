@@ -1,3 +1,5 @@
 [build]
 # rustflags = ["-C", "link-args=-nostartfiles"]
+# rustflags = ["-C", "target-feature=-neon,-fp-armv8"]
+rustflags = ["-C", "target-feature=+lse"]
 target = "aarch64-unknown-none"

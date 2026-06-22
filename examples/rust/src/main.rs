@@ -1,6 +1,10 @@
 #![no_std]
 #![no_main]
 
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
+
 use core::arch::asm;
 
 // trait A {
@@ -17,29 +21,32 @@ use core::arch::asm;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() {
-    let mut x = 0;
+    let x = 0;
 
-    for i in 0..6 {
-        x += i;
-    }
+    // for i in 0..6 {
+    //     x += i;
+    // }
 
-    exit(x);
+    let mut y = 1.0 + 4.2;
+    y *= 2.5;
+    y += 3.0;
+    y += x as f32;
+
+    // exit(x);
 }
 
-fn exit(code: i32) /* -> ! */ {
-    unsafe {
-        asm!(
-            "mov x8, #93",
-            "mov x0, {code}",
-            "svc #0",
-            code = in(reg) code,
-            out("x0") _,
-            out("x8") _,
-        );
-    }
-
-    // loop {}
-}
+// fn exit(code: i32) /* -> ! */ {
+//     unsafe {
+//         asm!(
+//             "mov x8, #93",
+//             "mov x0, {code}",
+//             "svc #0",
+//             code = in(reg) code,
+//             out("x0") _,
+//             out("x8") _,
+//         );
+//     }
+// }
 
 // fn b() -> i32 {
 //     0
