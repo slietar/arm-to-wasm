@@ -1,10 +1,47 @@
 use crate::{
-    instructions::{BitfieldMoveMode, SIMDTripleOp, Instruction, LogicalOp},
-    structures::{Arrangement, InstructionBytes, Shift, SizeVariant},
+    instructions::{BitfieldMoveMode, FPProcessingOp, SIMDTripleOp, Instruction, LogicalOp},
+    structures::{Arrangement, FPSize, InstructionBytes, Shift, SizeVariant},
     utilities::equal_masked,
 };
 
 pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
+    // Floating-point data-processing (2 source)
+    // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Scalar-Floating-Point-and-Advanced-SIMD?lang=en#floatdp2
+    if equal_masked(
+        bytes.0,
+        0b1111_1111_0010_0000_0000_1100_0000_0000,
+        0b0001_1110_0010_0000_0000_1000_0000_0000,
+    ) {
+        let size = match bytes.immediate_unsigned(22, 2) {
+            0b00 => FPSize::Single,
+            0b01 => FPSize::Double,
+            0b11 => FPSize::Half,
+            _ => panic!(),
+        };
+
+        let op = match bytes.immediate_unsigned(12, 4) {
+            0b0000 => FPProcessingOp::Multiply,
+            0b0001 => FPProcessingOp::Divide,
+            0b0010 => FPProcessingOp::Add,
+            0b0011 => FPProcessingOp::Subtract,
+            0b0100 => FPProcessingOp::Maximum,
+            0b0101 => FPProcessingOp::Minimum,
+            0b0110 => FPProcessingOp::MaximumNumber,
+            0b0111 => FPProcessingOp::MinimumNumber,
+            0b1000 => FPProcessingOp::NegatedMultiply,
+            _ => return None,
+        };
+
+        return Some(Instruction::FPProcessing {
+            destination: bytes.register_simd(0),
+            op,
+            operand1: bytes.register_simd(5),
+            operand2: bytes.register_simd(16),
+            size,
+        });
+    }
+
+    // Advanced SIMD three same
     if equal_masked(
         bytes.0,
         0b1000_1111_0010_0000_0000_0100_0000_0000,

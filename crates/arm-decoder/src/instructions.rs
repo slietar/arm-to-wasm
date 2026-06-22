@@ -91,6 +91,19 @@ pub enum BitfieldMoveMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FPProcessingOp {
+    Multiply, // FMUL
+    Divide, // FDIV
+    Add, // FADD
+    Subtract, // FSUB
+    Maximum, // FMAX
+    Minimum, // FMIN
+    MaximumNumber, // FMAXNM
+    MinimumNumber, // FMINNM
+    NegatedMultiply, // FNMUL
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SIMDTripleOp {
     SignedHalvingAdd, // SHADD
     SignedSaturatingAdd, // SQADD
@@ -351,6 +364,14 @@ pub enum Instruction {
         target: i64,
         test_bit: u32,
         variant: SizeVariant,
+    },
+
+    FPProcessing {
+        destination: Register,
+        op: FPProcessingOp,
+        operand1: Register,
+        operand2: Register,
+        size: FPSize,
     },
 
     SIMDTriple {
