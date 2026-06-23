@@ -3,13 +3,15 @@ use std::{
     hash::Hash,
 };
 
-use elf::section;
+use elf::{ElfBytes, gnu_symver};
 
 use crate::{
     constants::INSTRUCTION_SIZE,
     instruction_helper::InstructionInfo as _,
-    instructions::{Address, AddressingMode, Instruction, Register, SizeVariant, SizedRegister},
+    instructions::{Address, AddressingMode, Instruction, Register, SizeVariant, SizedRegister}, shared_library,
 };
+
+pub type ElfFile<'a> = ElfBytes<'a, elf::endian::AnyEndian>;
 
 #[derive(Debug, Clone)]
 pub struct Routine {
@@ -59,8 +61,10 @@ struct StackAccess {
     write: bool,
 }
 
-pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>> {
-    let elf_file = elf::ElfBytes::<elf::endian::AnyEndian>::minimal_parse(&elf_bytes)?;
+pub fn analyze(
+    elf_bytes: &[u8],
+    elf_file: ElfFile,
+) -> Result<Analysis, Box<dyn std::error::Error>> {
     let (section_headers_opt, section_name_table_opt) = elf_file.section_headers_with_strtab()?;
     let section_headers = section_headers_opt
         .ok_or_else(|| "ELF has no section headers".to_string())?
@@ -99,6 +103,12 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
             }
         }
     }
+
+    for routine_name in routines_names.values() {
+        eprintln!("{}", routine_name.as_deref().unwrap());
+    }
+
+    return Err("Analysis is currently disabled".into());
 
     for section in section_headers.iter() {
         let is_executable = (section.sh_flags & elf::abi::SHF_EXECINSTR as u64) != 0;
@@ -620,9 +630,40 @@ pub fn analyze(elf_bytes: &[u8]) -> Result<Analysis, Box<dyn std::error::Error>>
 }
 
 pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-    let analysis = analyze(elf_bytes)?;
+    let elf_file = ElfFile::minimal_parse(elf_bytes)?;
 
-    eprintln!("Analysis result: {:#?}", analysis);
+    shared_library::analyze_shared_library(elf_file)?;
+
+    // let analysis = analyze(elf_bytes, elf_file)?;
+    // eprintln!("Analysis result: {:#?}", analysis);
+
+    // let mut needed_shared_libraries = Vec::new();
+
+    // for symbol in dynamic_symbol_table {
+    //     eprintln!(
+    //         "Dynamic symbol: name: {}, value: {:#x}, size: {}, info: {}, other: {}, shndx: {}",
+    //         dynamic_symbol_string_table.get(symbol.st_name as usize)?,
+    //         symbol.st_value,
+    //         symbol.st_size,
+    //         symbol.st_info,
+    //         symbol.st_other,
+    //         symbol.st_shndx
+    //     );
+    // }
+
+    // for segment in elf_file.segments().unwrap().iter() {
+    //     eprintln!(
+    //         "Segment: type: {}, flags: {}, offset: {:#x}, vaddr: {:#x}, paddr: {:#x}, filesz: {:#x}, memsz: {:#x}, align: {}",
+    //         segment.p_type,
+    //         segment.p_flags,
+    //         segment.p_offset,
+    //         segment.p_vaddr,
+    //         segment.p_paddr,
+    //         segment.p_filesz,
+    //         segment.p_memsz,
+    //         segment.p_align
+    //     );
+    // }
 
     Ok(())
 }

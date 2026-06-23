@@ -8,7 +8,8 @@ mod decoding;
 mod instruction_helper;
 mod instructions;
 mod module;
-mod translation;
+mod shared_library;
+// mod translation;
 // mod translator;
 
 use clap::Parser;
@@ -51,8 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             instructions::decode_file(&elf_bytes)?;
         }
         "translate" => {
-            let optimize = subcommand_matches.get_flag("optimize");
-            translation::translate(&elf_bytes, optimize)?;
+            todo!()
+            // let optimize = subcommand_matches.get_flag("optimize");
+            // translation::translate(&elf_bytes, optimize)?;
         }
         _ => unreachable!(),
     }
