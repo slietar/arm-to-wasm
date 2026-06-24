@@ -7,7 +7,7 @@ mod constants;
 mod decoding;
 mod instruction_helper;
 mod shared_library;
-// mod translation;
+mod translation;
 mod translator;
 
 use clap::Parser;
@@ -25,10 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             clap::command!("translate")
                 .about("Translate an ELF file to WebAssembly")
                 .arg(clap::arg!(<FILE> "The ELF file to translate").required(true))
-                .arg(
-                    clap::arg!(--optimize "Optimize the generated WebAssembly")
-                        .required(false)
-                ),
+                .arg(clap::arg!(--optimize "Optimize the generated WebAssembly").required(false)),
         );
 
     let matches = command.get_matches();
@@ -42,8 +39,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             analysis::main_analyze(&elf_bytes)?;
         }
         "translate" => {
-            // let optimize = subcommand_matches.get_flag("optimize");
-            // translation::translate(&elf_bytes, optimize)?;
+            let module = translator::GlobalContext::translate_elf(&elf_bytes)?;
+
+            let ok = module.validate();
+            let optimize = false;
+
+            if ok {
+                if optimize {
+                    module.optimize();
+                }
+
+                module.print();
+                // module.write(&mut File::create("output.wasm")?)?;
+            }
         }
         _ => unreachable!(),
     }

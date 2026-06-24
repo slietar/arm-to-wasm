@@ -55,7 +55,7 @@ impl Module {
         }
     }
 
-    pub fn optimize(&mut self) {
+    pub fn optimize(&self) {
         unsafe {
             by::BinaryenModuleOptimize(self.inner.ptr);
         }
@@ -90,7 +90,7 @@ impl Module {
 
 #[test]
 fn test_module() {
-    let mut module = Module::new();
+    let module = Module::new();
 
     assert!(module.validate());
 

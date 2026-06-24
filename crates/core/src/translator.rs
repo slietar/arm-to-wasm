@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::{collections::HashMap, ffi::CString};
 
 use crate::{
     analysis::{ElfFile, Routine},
@@ -12,14 +12,26 @@ use binaryen::ffi as by;
 use binaryen_module::{BinaryOp, Expression, Module, Type, UnaryOp};
 use elf::ElfBytes;
 
-pub const GENERAL_PURPOSE_REGISTER_COUNT: u32 = 32;
-pub const PARAMETER_REGISTER_COUNT: u32 = 8;
+pub const GP_REGISTER_COUNT: u32 = 31;
+pub const GP_FLAG_COUNT: u32 = 4;
 
 pub const FIRST_FLAG_LOCAL_INDEX: u32 = 0;
 pub const SP_REGISTER_LOCAL_INDEX: u32 = 4;
 pub const FIRST_GP_REGISTER_LOCAL_INDEX: u32 = 5;
 pub const INTERNAL_CALL_RETURN_LOCAL_INDEX: u32 = FIRST_GP_REGISTER_LOCAL_INDEX + 5;
 pub const SVC_CALL_RETURN_LOCAL_INDEX: u32 = INTERNAL_CALL_RETURN_LOCAL_INDEX + 1;
+
+pub const PARAM_REGISTERS: [Register; 9] = [
+    Register::X0,
+    Register::X1,
+    Register::X2,
+    Register::X3,
+    Register::X4,
+    Register::X5,
+    Register::X6,
+    Register::X7,
+    Register::SP,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flag {
@@ -42,63 +54,30 @@ impl Flag {
 
 #[derive(Debug)]
 pub struct RoutineContext {
-    param_count: u32,
-    module: Module,
+    first_flag_local_index: u32,
+    local_index_by_register: HashMap<Register, u32>,
+    pub module: Module,
+    pub return_registers: Vec<Register>,
 }
 
 impl RoutineContext {
-    fn read_flag(&self, flag: Flag) -> Expression {
+    pub fn read_flag(&self, flag: Flag) -> Expression {
         self.module.local_get(
-            self.param_count + FIRST_FLAG_LOCAL_INDEX + flag.index(),
+            self.first_flag_local_index + flag.index(),
             self.module.i32(),
         )
     }
 
-    fn get_register_local_index(&self, register: Register) -> u32 {
+    pub fn get_register_local_index(&self, register: Register) -> u32 {
         use Register::*;
 
-        self.param_count
-            + match register {
-                SP => SP_REGISTER_LOCAL_INDEX,
-
-                X0 => FIRST_GP_REGISTER_LOCAL_INDEX + 0,
-                X1 => FIRST_GP_REGISTER_LOCAL_INDEX + 1,
-                X2 => FIRST_GP_REGISTER_LOCAL_INDEX + 2,
-                X3 => FIRST_GP_REGISTER_LOCAL_INDEX + 3,
-                X4 => FIRST_GP_REGISTER_LOCAL_INDEX + 4,
-                X5 => FIRST_GP_REGISTER_LOCAL_INDEX + 5,
-                X6 => FIRST_GP_REGISTER_LOCAL_INDEX + 6,
-                X7 => FIRST_GP_REGISTER_LOCAL_INDEX + 7,
-                X8 => FIRST_GP_REGISTER_LOCAL_INDEX + 8,
-                X9 => FIRST_GP_REGISTER_LOCAL_INDEX + 9,
-                X10 => FIRST_GP_REGISTER_LOCAL_INDEX + 10,
-                X11 => FIRST_GP_REGISTER_LOCAL_INDEX + 11,
-                X12 => FIRST_GP_REGISTER_LOCAL_INDEX + 12,
-                X13 => FIRST_GP_REGISTER_LOCAL_INDEX + 13,
-                X14 => FIRST_GP_REGISTER_LOCAL_INDEX + 14,
-                X15 => FIRST_GP_REGISTER_LOCAL_INDEX + 15,
-                X16 => FIRST_GP_REGISTER_LOCAL_INDEX + 16,
-                X17 => FIRST_GP_REGISTER_LOCAL_INDEX + 17,
-                X18 => FIRST_GP_REGISTER_LOCAL_INDEX + 18,
-                X19 => FIRST_GP_REGISTER_LOCAL_INDEX + 19,
-                X20 => FIRST_GP_REGISTER_LOCAL_INDEX + 20,
-                X21 => FIRST_GP_REGISTER_LOCAL_INDEX + 21,
-                X22 => FIRST_GP_REGISTER_LOCAL_INDEX + 22,
-                X23 => FIRST_GP_REGISTER_LOCAL_INDEX + 23,
-                X24 => FIRST_GP_REGISTER_LOCAL_INDEX + 24,
-                X25 => FIRST_GP_REGISTER_LOCAL_INDEX + 25,
-                X26 => FIRST_GP_REGISTER_LOCAL_INDEX + 26,
-                X27 => FIRST_GP_REGISTER_LOCAL_INDEX + 27,
-                X28 => FIRST_GP_REGISTER_LOCAL_INDEX + 28,
-                X29 => FIRST_GP_REGISTER_LOCAL_INDEX + 29,
-                X30 => FIRST_GP_REGISTER_LOCAL_INDEX + 30,
-
-                X31 => unreachable!(),
-                XZR => unreachable!(),
-            }
+        self.local_index_by_register
+            .get(&register)
+            .copied()
+            .unwrap()
     }
 
-    fn read_register(&self, register: Register, variant: SizeVariant) -> Expression {
+    pub fn read_register(&self, register: Register, variant: SizeVariant) -> Expression {
         match register {
             Register::XZR => match variant {
                 SizeVariant::Reg32 => self.module.const_(0i32),
@@ -117,8 +96,13 @@ impl RoutineContext {
         }
     }
 
-    fn write_register(
-        &mut self,
+    pub fn write_flag(&self, flag: Flag, value: Expression) -> Expression {
+        self.module
+            .local_set(self.first_flag_local_index + flag.index(), value)
+    }
+
+    pub fn write_register(
+        &self,
         register: Register,
         variant: SizeVariant,
         value: Expression,
@@ -138,21 +122,6 @@ impl RoutineContext {
     }
 }
 
-impl RoutineContext {
-    pub fn translate_instruction(
-        &self,
-        instruction: &Instruction,
-        block_exprs: &mut Vec<Expression>,
-    ) {
-        match instruction {
-            Instruction::Nop => {
-                block_exprs.push(self.module.nop());
-            }
-            _ => todo!(),
-        }
-    }
-}
-
 pub const SVC_PARAM_REGISTERS: [Register; 7] = [
     Register::X8,
     Register::X0,
@@ -166,7 +135,7 @@ pub const SVC_PARAM_REGISTERS: [Register; 7] = [
 pub const SVC_RETURN_REGISTERS: [Register; 2] = [Register::X0, Register::X1];
 
 #[derive(Debug)]
-struct GlobalContext {
+pub struct GlobalContext {
     module: Module,
     svc_function_name: String,
     svc_return_type: Type,
@@ -274,35 +243,15 @@ impl GlobalContext {
             module.export_function(entry_function_name, "_entry");
         }
 
-        // let ok = module.validate();
-
-        // if ok {
-        //     if optimize {
-        //         module.optimize();
-        //     }
-
-        //     module.print();
-        //     module.save(&mut File::create("output.wasm")?)?;
-        // }
-
         Ok(module)
     }
 
     pub fn translate_routine(&self, routine: &Routine, function_name: &str) {
         let module = &self.module;
 
-        let param_registers = [
-            Register::X0,
-            Register::X1,
-            Register::X2,
-            Register::X3,
-            Register::X4,
-            Register::X5,
-            Register::X6,
-            Register::X7,
-            Register::SP,
-        ];
+        // Allocate parameters and locals
 
+        let param_registers = PARAM_REGISTERS;
         let param_count = param_registers.len() as u32;
 
         let param_types = param_registers
@@ -312,33 +261,57 @@ impl GlobalContext {
 
         let return_type = module.tuple_type(&param_types);
 
-        let local_types = {
-            let mut local_types = Vec::new();
+        let mut next_local_index = 0;
 
-            // SP
-            local_types.push(module.i64());
+        let mut local_index_by_register = param_registers
+            .iter()
+            .enumerate()
+            .map(|(param_index, register)| {
+                let local_index = param_index as u32;
+                next_local_index = next_local_index.max(local_index + 1);
+                (*register, local_index)
+            })
+            .collect::<HashMap<_, _>>();
 
-            // Flags
+        let mut local_types = Vec::new();
+
+        for reg_index in 0..GP_REGISTER_COUNT {
+            let reg = Register::decode(reg_index, false, true);
+
+            if !local_index_by_register.contains_key(&reg) {
+                let local_index = next_local_index;
+                next_local_index += 1;
+
+                local_index_by_register.insert(reg, local_index);
+                local_types.push(module.i64());
+            }
+        }
+
+        let first_flag_local_index = next_local_index;
+
+        for _ in 0..GP_FLAG_COUNT {
+            let local_index = next_local_index;
+            next_local_index += 1;
+
             local_types.push(module.i32());
-            local_types.push(module.i32());
-            local_types.push(module.i32());
-            local_types.push(module.i32());
+        }
 
-            // GP registers
-            local_types.extend((0..GENERAL_PURPOSE_REGISTER_COUNT).map(|_| module.i64()));
+        // Additional locals for temporary values
+        local_types.push(return_type.clone());
+        local_types.push(self.svc_return_type.clone());
+        next_local_index += 2;
 
-            // Additional locals for temporary values
-            local_types.push(return_type.clone());
-            local_types.push(self.svc_return_type.clone());
+        _ = next_local_index;
 
-            local_types
-        };
+        // Run translation
 
         let relooper = module.relooper();
 
         let context = RoutineContext {
-            param_count,
+            first_flag_local_index,
+            local_index_by_register,
             module: module.clone(),
+            return_registers: param_registers.to_vec(),
         };
 
         let mut routine_exprs = Vec::new();

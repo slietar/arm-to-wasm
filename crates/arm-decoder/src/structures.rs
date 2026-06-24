@@ -39,7 +39,7 @@ pub enum Register {
 }
 
 impl Register {
-    fn decode(value: u32, simd_mode: bool, sp_mode: bool) -> Self {
+    pub fn decode(value: u32, simd_mode: bool, sp_mode: bool) -> Self {
         use Register::*;
 
         match value {
