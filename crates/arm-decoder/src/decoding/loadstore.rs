@@ -54,10 +54,10 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
             offset: LoadStoreOffset::Register {
                 register: bytes.register(16, false),
                 extension: match bytes.immediate_unsigned(13, 3) {
-                    0b010 => Some(Extension::UXTW),
-                    0b011 => None,
-                    0b110 => Some(Extension::SXTW),
-                    0b111 => Some(Extension::SXTX),
+                    0b010 => Extension::UXTW,
+                    0b011 => Extension::UXTX,
+                    0b110 => Extension::SXTW,
+                    0b111 => Extension::SXTX,
                     _ => panic!(),
                 },
                 shift_amount: if bytes.bool(12) {

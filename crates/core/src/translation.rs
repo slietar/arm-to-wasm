@@ -1,9 +1,12 @@
 use arm_decoder::{
-    instructions::{AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction, LogicalOp},
-    structures::{Register, Shift, SizeVariant, SliceSize},
+    instructions::{
+        AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreOffset,
+        LoadStoreOp, LogicalOp,
+    },
+    structures::{Extension, Register, Shift, SizeVariant, SliceSize, WritebackOffset},
     utilities::INSTRUCTION_SIZE,
 };
-use binaryen_module::{BinaryOp, Expression, UnaryOp};
+use binaryen_module::{BinaryOp, Expression, LoadVariant, StoreVariant, UnaryOp};
 
 use crate::translator::{
     DEFAULT_PARAM_REGISTERS, Flag, RoutineContext, SVC_PARAM_REGISTERS, SVC_RETURN_REGISTERS,
@@ -286,6 +289,141 @@ impl RoutineContext<'_> {
                 }
             }
 
+            Instruction::LoadStoreRegister {
+                address,
+                offset,
+                op,
+                size,
+                value,
+            } => {
+                let base_address_expr = self.read_register(*address, SizeVariant::Reg64);
+
+                let (address_expr, access_offset) = match offset {
+                    LoadStoreOffset::Immediate { offset } => {
+                        if offset.access < 0 {
+                            (
+                                self.module.binary(
+                                    base_address_expr,
+                                    self.module.const_(offset.access as i64),
+                                    BinaryOp::AddInt64,
+                                ),
+                                0,
+                            )
+                        } else {
+                            (base_address_expr, offset.access as u32)
+                        }
+                    }
+                    LoadStoreOffset::Register {
+                        extension,
+                        register,
+                        shift_amount,
+                    } => {
+                        let mut offset_expr =
+                            self.read_register(*register, extension.size.cover_variant());
+
+                        match *extension {
+                            Extension::UXTW => {
+                                offset_expr = self.module.unary(offset_expr, UnaryOp::ExtendUInt32);
+                            }
+                            Extension::SXTW => {
+                                offset_expr = self.module.unary(offset_expr, UnaryOp::ExtendSInt32);
+                            }
+                            Extension::SXTX | Extension::UXTX => {}
+                            _ => unreachable!(),
+                        }
+
+                        (
+                            self.module.binary(
+                                base_address_expr,
+                                self.module.binary(
+                                    offset_expr,
+                                    self.module.const_(*shift_amount as i64),
+                                    BinaryOp::ShlInt64,
+                                ),
+                                BinaryOp::AddInt64,
+                            ),
+                            0,
+                        )
+                    }
+                };
+
+                match op {
+                    LoadStoreOp::Store => {
+                        let value_expr = self.read_register(*value, size.cover_variant());
+                        let store_variant = match size {
+                            SliceSize::Byte => StoreVariant::I32L8,
+                            SliceSize::Halfword => StoreVariant::I32L16,
+                            SliceSize::Word => StoreVariant::I32,
+                            SliceSize::Doubleword => StoreVariant::I64,
+                        };
+
+                        block_exprs.push(self.module.store(
+                            store_variant,
+                            value_expr,
+                            address_expr,
+                            access_offset,
+                            1,
+                            &self.global.memory_name,
+                        ));
+                    }
+                    LoadStoreOp::LoadSignExtend { .. } | LoadStoreOp::LoadZeroExtend => {
+                        let (variant, signed) = match op {
+                            LoadStoreOp::LoadSignExtend { variant } => (*variant, true),
+                            LoadStoreOp::LoadZeroExtend => (size.cover_variant(), false),
+                            _ => unreachable!(),
+                        };
+
+                        let load_variant = match (size, variant) {
+                            (SliceSize::Byte, SizeVariant::Reg32) => LoadVariant::I32L8 { signed },
+                            (SliceSize::Byte, SizeVariant::Reg64) => LoadVariant::I64L16 { signed },
+                            (SliceSize::Halfword, SizeVariant::Reg32) => {
+                                LoadVariant::I32L16 { signed }
+                            }
+                            (SliceSize::Halfword, SizeVariant::Reg64) => {
+                                LoadVariant::I64L16 { signed }
+                            }
+                            (SliceSize::Word, SizeVariant::Reg32) => LoadVariant::I32,
+                            (SliceSize::Word, SizeVariant::Reg64) => LoadVariant::I64L32 { signed },
+                            (SliceSize::Doubleword, SizeVariant::Reg64) => LoadVariant::I64,
+                            _ => unreachable!(),
+                        };
+
+                        let loaded_expr = self.module.load(
+                            load_variant,
+                            address_expr,
+                            access_offset,
+                            1,
+                            &self.global.memory_name,
+                        );
+
+                        block_exprs.push(self.write_register(
+                            *value,
+                            size.cover_variant(),
+                            loaded_expr,
+                        ));
+                    }
+                }
+
+                if let LoadStoreOffset::Immediate {
+                    offset:
+                        WritebackOffset {
+                            access: _,
+                            writeback: Some(writeback),
+                        },
+                } = offset
+                {
+                    block_exprs.push(self.write_register(
+                        *address,
+                        SizeVariant::Reg64,
+                        self.module.binary(
+                            self.read_register(*address, SizeVariant::Reg64),
+                            self.module.const_(*writeback as i64),
+                            BinaryOp::AddInt64,
+                        ),
+                    ));
+                }
+            }
+
             Instruction::LogicalImmediate {
                 destination,
                 op,
@@ -520,7 +658,10 @@ impl RoutineContext<'_> {
                 block_exprs.push(self.module.return_(self.module.tuple(&return_exprs)));
             }
             _ => {
-                eprintln!("Warning: Unhandled instruction at address {:#x}: {:?}", address, instruction);
+                eprintln!(
+                    "Warning: Unhandled instruction at address {:#x}: {:?}",
+                    address, instruction
+                );
                 block_exprs.push(self.module.nop());
             }
         }

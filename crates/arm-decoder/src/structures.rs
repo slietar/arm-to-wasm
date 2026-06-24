@@ -221,6 +221,17 @@ impl SliceSize {
     }
 }
 
+impl SliceSize {
+    pub fn cover_variant(&self) -> SizeVariant {
+        match self {
+            Self::Byte => SizeVariant::Reg32,
+            Self::Halfword => SizeVariant::Reg32,
+            Self::Word => SizeVariant::Reg32,
+            Self::Doubleword => SizeVariant::Reg64,
+        }
+    }
+}
+
 impl From<SizeVariant> for SliceSize {
     fn from(value: SizeVariant) -> Self {
         match value {

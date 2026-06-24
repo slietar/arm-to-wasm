@@ -140,9 +140,11 @@ pub const SVC_RETURN_REGISTERS: [Register; 2] = [Register::X0, Register::X1];
 
 #[derive(Debug)]
 pub struct GlobalContext {
+    module: Module,
+
     pub analysis: Analysis,
     pub function_names: Vec<String>,
-    module: Module,
+    pub memory_name: CString,
     pub svc_function_name: String,
     pub svc_return_type: Type,
 }
@@ -192,6 +194,7 @@ impl GlobalContext {
         let context = Self {
             analysis,
             function_names,
+            memory_name: memory_info.name,
             module: module.clone(),
             svc_function_name: svc_function_name.to_string(),
             svc_return_type,

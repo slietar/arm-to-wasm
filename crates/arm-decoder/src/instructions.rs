@@ -69,7 +69,7 @@ pub enum LoadStoreOffset {
         offset: WritebackOffset,
     },
     Register {
-        extension: Option<Extension>,
+        extension: Extension,
         register: Register,
         shift_amount: u64,
     },
