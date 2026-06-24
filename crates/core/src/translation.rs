@@ -376,6 +376,48 @@ impl RoutineContext<'_> {
                 }
             }
 
+            Instruction::MoveWide {
+                destination,
+                keep_shift,
+                source,
+                value,
+                variant,
+            } => {
+                let immediate_expr = match variant {
+                    SizeVariant::Reg32 => self.module.const_(*value as u32),
+                    SizeVariant::Reg64 => self.module.const_(*value),
+                };
+
+                let result_expr = if let Some(shift) = keep_shift {
+                    let existing_expr = self.read_register(*source, *variant);
+
+                    let mask_expr = match variant {
+                        SizeVariant::Reg32 => self.module.const_(!(0xffffu32 << shift)),
+                        SizeVariant::Reg64 => self.module.const_(!(0xffffu64 << shift)),
+                    };
+
+                    self.module.binary(
+                        immediate_expr,
+                        self.module.binary(
+                            existing_expr,
+                            mask_expr,
+                            match variant {
+                                SizeVariant::Reg32 => BinaryOp::AndInt32,
+                                SizeVariant::Reg64 => BinaryOp::AndInt64,
+                            },
+                        ),
+                        match variant {
+                            SizeVariant::Reg32 => BinaryOp::OrInt32,
+                            SizeVariant::Reg64 => BinaryOp::OrInt64,
+                        },
+                    )
+                } else {
+                    immediate_expr
+                };
+
+                block_exprs.push(self.write_register(*destination, *variant, result_expr));
+            }
+
             Instruction::UnconditionalBranch {
                 link: true,
                 target: BranchTarget::RelativeInstructionOffset(target_offset),
@@ -478,6 +520,7 @@ impl RoutineContext<'_> {
                 block_exprs.push(self.module.return_(self.module.tuple(&return_exprs)));
             }
             _ => {
+                eprintln!("Warning: Unhandled instruction at address {:#x}: {:?}", address, instruction);
                 block_exprs.push(self.module.nop());
             }
         }
