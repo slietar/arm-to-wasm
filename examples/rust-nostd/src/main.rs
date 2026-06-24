@@ -19,21 +19,41 @@ use core::arch::asm;
 //     }
 // }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
-    let x = 0;
+fn foobar(
+    a0: i32,
+    a1: i32,
+    a2: i32,
+    a3: i32,
+    a4: i32,
+    a5: i32,
+    a6: i32,
+    a7: i32,
+    a8: i32,
+    a9: i32,
+    a10: i32,
+) {
 
-    // for i in 0..6 {
-    //     x += i;
-    // }
-
-    let mut y = 1.0 + 4.2;
-    y *= 2.5;
-    y += 3.0;
-    y += x as f32;
-
-    // exit(x);
 }
+
+pub fn main() {
+    foobar(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+}
+
+// #[unsafe(no_mangle)]
+// pub extern "C" fn _start() {
+//     let x = 0;
+
+//     // for i in 0..6 {
+//     //     x += i;
+//     // }
+
+//     let mut y = 1.0 + 4.2;
+//     y *= 2.5;
+//     y += 3.0;
+//     y += x as f32;
+
+//     // exit(x);
+// }
 
 // fn exit(code: i32) /* -> ! */ {
 //     unsafe {

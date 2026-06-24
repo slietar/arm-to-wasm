@@ -4,5 +4,8 @@ members = [
     "crates/arm-decoder",
     "crates/core",
     "crates/runtime",
-    "examples/rust",
+]
+exclude = [
+    "examples/rust-nostd",
+    "examples/rust-std",
 ]
