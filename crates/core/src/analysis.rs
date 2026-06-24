@@ -108,10 +108,6 @@ pub fn analyze(
         }
     }
 
-    for routine_name in routines_names.values() {
-        eprintln!("{}", routine_name.as_deref().unwrap());
-    }
-
     for section in section_headers.iter() {
         let is_executable = (section.sh_flags & elf::abi::SHF_EXECINSTR as u64) != 0;
         let section_name = section_name_table.get(section.sh_name as usize);

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ffi::CString};
 
 use crate::{
-    analysis::{ElfFile, Routine},
+    analysis::{Analysis, ElfFile, Routine},
     constants::{INSTRUCTION_SIZE, PAGE_SIZE},
 };
 use arm_decoder::{
@@ -21,7 +21,7 @@ pub const FIRST_GP_REGISTER_LOCAL_INDEX: u32 = 5;
 pub const INTERNAL_CALL_RETURN_LOCAL_INDEX: u32 = FIRST_GP_REGISTER_LOCAL_INDEX + 5;
 pub const SVC_CALL_RETURN_LOCAL_INDEX: u32 = INTERNAL_CALL_RETURN_LOCAL_INDEX + 1;
 
-pub const PARAM_REGISTERS: [Register; 9] = [
+pub const DEFAULT_PARAM_REGISTERS: [Register; 9] = [
     Register::X0,
     Register::X1,
     Register::X2,
@@ -53,17 +53,18 @@ impl Flag {
 }
 
 #[derive(Debug)]
-pub struct RoutineContext {
+pub struct RoutineContext<'a> {
+    pub global: &'a GlobalContext,
+
     first_flag_local_index: u32,
     local_index_by_register: HashMap<Register, u32>,
+    pub func_return_scratch_local_index: u32,
     pub module: Module,
     pub return_registers: Vec<Register>,
-    pub svc_function_name: String,
     pub svc_return_scratch_local_index: u32,
-    pub svc_return_type: Type,
 }
 
-impl RoutineContext {
+impl RoutineContext<'_> {
     pub fn read_flag(&self, flag: Flag) -> Expression {
         self.module.local_get(
             self.first_flag_local_index + flag.index(),
@@ -139,9 +140,11 @@ pub const SVC_RETURN_REGISTERS: [Register; 2] = [Register::X0, Register::X1];
 
 #[derive(Debug)]
 pub struct GlobalContext {
+    pub analysis: Analysis,
+    pub function_names: Vec<String>,
     module: Module,
-    svc_function_name: String,
-    svc_return_type: Type,
+    pub svc_function_name: String,
+    pub svc_return_type: Type,
 }
 
 impl GlobalContext {
@@ -187,17 +190,19 @@ impl GlobalContext {
         let memory_info = set_up_memory("memory", bytes, &elf_file, &module);
 
         let context = Self {
+            analysis,
+            function_names,
             module: module.clone(),
             svc_function_name: svc_function_name.to_string(),
             svc_return_type,
         };
 
-        for (routine_index, routine) in analysis.routines.iter().enumerate() {
-            let function_name = &function_names[routine_index];
+        for (routine_index, routine) in context.analysis.routines.iter().enumerate() {
+            let function_name = &context.function_names[routine_index];
             context.translate_routine(routine, function_name);
         }
 
-        if let Some(entry_routine_index) = analysis.entry_routine_index {
+        if let Some(entry_routine_index) = context.analysis.entry_routine_index {
             // TODO: Avoid redundancy
             let param_registers = [
                 Register::X0,
@@ -234,7 +239,7 @@ impl GlobalContext {
                     module.none(),
                     &[
                         module.drop(module.call(
-                            &function_names[entry_routine_index],
+                            &context.function_names[entry_routine_index],
                             &arg_exprs,
                             module.tuple_type(&param_types),
                         )),
@@ -254,7 +259,7 @@ impl GlobalContext {
 
         // Allocate parameters and locals
 
-        let param_registers = PARAM_REGISTERS;
+        let param_registers = DEFAULT_PARAM_REGISTERS;
         let param_count = param_registers.len() as u32;
 
         let param_types = param_registers
@@ -300,9 +305,13 @@ impl GlobalContext {
         }
 
         // Additional locals for temporary values
+        let func_return_scratch_local_index = next_local_index;
         local_types.push(return_type.clone());
+        next_local_index += 1;
+
+        let svc_return_scratch_local_index = next_local_index;
         local_types.push(self.svc_return_type.clone());
-        next_local_index += 2;
+        next_local_index += 1;
 
         _ = next_local_index;
 
@@ -311,13 +320,14 @@ impl GlobalContext {
         let relooper = module.relooper();
 
         let context = RoutineContext {
+            global: self,
+
             first_flag_local_index,
+            func_return_scratch_local_index,
             local_index_by_register,
             module: module.clone(),
             return_registers: param_registers.to_vec(),
-            svc_return_type: self.svc_return_type.clone(),
-            svc_function_name: self.svc_function_name.clone(),
-            svc_return_scratch_local_index: next_local_index - 1,
+            svc_return_scratch_local_index,
         };
 
         let mut routine_exprs = Vec::new();
@@ -339,7 +349,7 @@ impl GlobalContext {
                 let current_address =
                     block.start_address + (instruction_index as u64) * INSTRUCTION_SIZE;
 
-                context.translate_instruction(instruction, &mut block_exprs);
+                context.translate_instruction(current_address, instruction, &mut block_exprs);
             }
 
             if block.fallthrough_block_index.is_none() && block.jump_block_index.is_none() {

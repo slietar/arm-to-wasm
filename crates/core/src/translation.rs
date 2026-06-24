@@ -1,14 +1,18 @@
 use arm_decoder::{
-    instructions::{AddSubtractOp, AddSubtractRightOperand, Instruction},
+    instructions::{AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction},
     structures::{Register, Shift, SizeVariant, SliceSize},
+    utilities::INSTRUCTION_SIZE,
 };
 use binaryen_module::{BinaryOp, Expression, UnaryOp};
 
-use crate::translator::{Flag, RoutineContext, SVC_PARAM_REGISTERS, SVC_RETURN_REGISTERS};
+use crate::translator::{
+    DEFAULT_PARAM_REGISTERS, Flag, RoutineContext, SVC_PARAM_REGISTERS, SVC_RETURN_REGISTERS,
+};
 
-impl RoutineContext {
+impl RoutineContext<'_> {
     pub fn translate_instruction(
         &self,
+        address: u64,
         instruction: &Instruction,
         block_exprs: &mut Vec<Expression>,
     ) {
@@ -281,6 +285,60 @@ impl RoutineContext {
                 }
             }
 
+            Instruction::UnconditionalBranch {
+                link: true,
+                target: BranchTarget::RelativeInstructionOffset(target_offset),
+            } => {
+                let target_address =
+                    ((address as i64) + *target_offset * (INSTRUCTION_SIZE as i64)) as u64;
+
+                let target_routine_index = self
+                    .global
+                    .analysis
+                    .routines
+                    .iter()
+                    .position(|r| r.address == target_address)
+                    .unwrap();
+                let target_function_name = &self.global.function_names[target_routine_index];
+
+                let return_registers = DEFAULT_PARAM_REGISTERS.to_vec();
+                let return_registers = self.return_registers.clone();
+
+                let arg_exprs = return_registers
+                    .iter()
+                    .map(|reg| self.read_register(*reg, SizeVariant::Reg64))
+                    .collect::<Vec<_>>();
+
+                let return_type = self.module.tuple_type(
+                    &(return_registers
+                        .iter()
+                        .map(|_| self.module.i64())
+                        .collect::<Vec<_>>()),
+                );
+
+                block_exprs.push(
+                    self.module.local_set(
+                        self.func_return_scratch_local_index,
+                        self.module
+                            .call(target_function_name, &arg_exprs, return_type.clone()),
+                    ),
+                );
+
+                for (return_index, return_register) in return_registers.iter().enumerate() {
+                    block_exprs.push(self.write_register(
+                        *return_register,
+                        SizeVariant::Reg64,
+                        self.module.tuple_extract(
+                            self.module.local_get(
+                                self.func_return_scratch_local_index,
+                                return_type.clone(),
+                            ),
+                            return_index as u32,
+                        ),
+                    ));
+                }
+            }
+
             Instruction::SupervisorCall { argument } => {
                 let arg_exprs = std::iter::once(self.module.const_(*argument as u32))
                     .chain(
@@ -293,19 +351,20 @@ impl RoutineContext {
                 block_exprs.push(self.module.local_set(
                     self.svc_return_scratch_local_index,
                     self.module.call(
-                        &self.svc_function_name,
+                        &self.global.svc_function_name,
                         &arg_exprs,
-                        self.svc_return_type.clone(),
+                        self.global.svc_return_type.clone(),
                     ),
                 ));
 
                 for (return_index, return_register) in SVC_RETURN_REGISTERS.iter().enumerate() {
-                    block_exprs.push(self.module.local_set(
-                        self.get_register_local_index(*return_register),
+                    block_exprs.push(self.write_register(
+                        *return_register,
+                        SizeVariant::Reg64,
                         self.module.tuple_extract(
                             self.module.local_get(
                                 self.svc_return_scratch_local_index,
-                                self.svc_return_type.clone(),
+                                self.global.svc_return_type.clone(),
                             ),
                             return_index as u32,
                         ),
