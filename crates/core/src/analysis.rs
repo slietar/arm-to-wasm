@@ -8,12 +8,12 @@ use arm_decoder::{
         AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreOffset,
         LoadStoreOp,
     },
-    structures::{Register, SizeVariant, WritebackOffset},
+    structures::{Register, SizeVariant, SliceSize, WritebackOffset},
     utilities::INSTRUCTION_SIZE,
 };
 use elf::{ElfBytes, gnu_symver};
 
-use crate::shared_library;
+use crate::{instruction_helper::{InstructionInfo as _, SizedRegister}, shared_library};
 
 pub type ElfFile<'a> = ElfBytes<'a, elf::endian::AnyEndian>;
 
@@ -23,7 +23,7 @@ pub struct Routine {
     pub blocks: Vec<Block>,
     pub name: Option<String>,
     pub stack_size: Option<u64>,
-    pub variables: HashMap<i32, SizeVariant>,
+    pub variables: HashMap<i32, SliceSize>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +60,7 @@ struct Jump {
 struct StackAccess {
     address: u64,
     offset: i32,
-    size: SizeVariant, // TODO: Update
+    size: SliceSize,
     read: bool,
     write: bool,
 }
@@ -276,7 +276,7 @@ pub fn analyze(
                     }
                     Instruction::AddSubtract {
                         destination: Register::SP,
-                        op: AddSubtractOp::Add,
+                        op: AddSubtractOp::Subtract,
                         operand1: Register::SP,
                         operand2: AddSubtractRightOperand::Immediate(offset),
                         set_flags: false,
@@ -303,8 +303,8 @@ pub fn analyze(
 
                         stack_accesses.push(StackAccess {
                             address: current_address,
-                            offset: 0,
-                            size: SizeVariant::Reg64,
+                            offset: offset.access,
+                            size: *size,
                             read: !write,
                             write,
                         });
@@ -315,7 +315,7 @@ pub fn analyze(
                         address: Register::SP,
                         offset,
                         op,
-                        size: _,
+                        size,
                         value1,
                         value2,
                         variant,
@@ -333,7 +333,7 @@ pub fn analyze(
                         stack_accesses.push(StackAccess {
                             address: current_address,
                             offset: offset.access,
-                            size: *variant,
+                            size: (*size).into(),
                             read: !write,
                             write,
                         });
@@ -341,7 +341,7 @@ pub fn analyze(
                         stack_accesses.push(StackAccess {
                             address: current_address,
                             offset: offset.access + variant.byte_count() as i32,
-                            size: *variant,
+                            size: (*variant).into(),
                             read: !write,
                             write,
                         });
@@ -511,7 +511,7 @@ pub fn analyze(
 
         // Register read analysis
 
-        /* let segment_instructions = Instruction::decode_bytes(&segment_data).collect();
+        let segment_instructions = Instruction::decode_bytes(&segment_data).collect::<Vec<_>>();
 
         type Walker = RegisterReadWalker;
         let walker = Walker::default();
@@ -556,21 +556,19 @@ pub fn analyze(
             if !inserted {
                 exit_walkers.push(walker);
             }
-        } */
+        }
 
         // eprintln!("Exit walker: {:#?}", Walker::merge_all(&exit_walkers));
 
         // Variable analysis
 
-        let mut variables = HashMap::<i32, SizeVariant>::new();
+        let mut variables = HashMap::<i32, SliceSize>::new();
 
         for stack_access in stack_accesses {
             let offset = stack_access.offset;
 
             if let Some(existing_size) = variables.get_mut(&offset) {
-                if stack_access.size == SizeVariant::Reg64 {
-                    *existing_size = SizeVariant::Reg64;
-                }
+                *existing_size = existing_size.max(&stack_access.size);
             } else {
                 variables.insert(offset, stack_access.size);
             }
@@ -620,12 +618,6 @@ pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> 
     // }
 
     Ok(())
-}
-
-/* #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SizedRegister {
-    pub register: Register,
-    pub variant: SizeVariant,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -695,4 +687,3 @@ fn hash_set<H: std::hash::Hasher, T: Hash + Eq>(state: &mut H, set: &HashSet<T>)
     state.write_usize(set.len());
     state.write_u64(hash);
 }
- */

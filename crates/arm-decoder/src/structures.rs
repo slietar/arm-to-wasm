@@ -207,6 +207,27 @@ impl SliceSize {
             SliceSize::Doubleword => 3,
         }
     }
+
+    pub fn max(&self, other: &Self) -> Self {
+        match (self, other) {
+            (SliceSize::Byte, _) => *other,
+            (_, SliceSize::Byte) => *self,
+            (SliceSize::Halfword, _) => *other,
+            (_, SliceSize::Halfword) => *self,
+            (SliceSize::Word, _) => *other,
+            (_, SliceSize::Word) => *self,
+            (SliceSize::Doubleword, SliceSize::Doubleword) => SliceSize::Doubleword,
+        }
+    }
+}
+
+impl From<SizeVariant> for SliceSize {
+    fn from(value: SizeVariant) -> Self {
+        match value {
+            SizeVariant::Reg32 => SliceSize::Word,
+            SizeVariant::Reg64 => SliceSize::Doubleword,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -314,7 +335,6 @@ impl Condition {
         }
     }
 }
-
 
 // https://developer.arm.com/documentation/102374/0103/Registers-in-AArch64---general-purpose-registers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

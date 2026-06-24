@@ -195,16 +195,7 @@ impl InstructionInfo for Instruction {
             }
             | SIMDTriple {
                 operand1, operand2, ..
-            } => vec![
-                SizedRegister {
-                    register: *operand1,
-                    variant: SizeVariant::Reg64,
-                },
-                SizedRegister {
-                    register: *operand2,
-                    variant: SizeVariant::Reg64,
-                },
-            ],
+            } => Vec::new(),
             Breakpoint { .. }
             | PrefetchMemory
             | PermanentlyUndefined { .. }
@@ -333,12 +324,7 @@ impl InstructionInfo for Instruction {
                 register: *destination,
                 variant: *integer_size,
             }],
-            FPProcessing { destination, .. } | SIMDTriple { destination, .. } => {
-                vec![SizedRegister {
-                    register: *destination,
-                    variant: SizeVariant::Reg64,
-                }]
-            }
+            FPProcessing { destination, .. } | SIMDTriple { destination, .. } => Vec::new(),
             Nop => Vec::new(),
             Return { .. }
             | SupervisorCall { .. }
