@@ -1,5 +1,5 @@
 use arm_decoder::{
-    instructions::{AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction},
+    instructions::{AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction, LogicalOp},
     structures::{Register, Shift, SizeVariant, SliceSize},
     utilities::INSTRUCTION_SIZE,
 };
@@ -281,7 +281,98 @@ impl RoutineContext<'_> {
                             BinaryOp::AndInt32,
                         ),
                     };
+
                     block_exprs.push(self.write_flag(Flag::Overflow, overflow_expr));
+                }
+            }
+
+            Instruction::LogicalImmediate {
+                destination,
+                op,
+                operand1,
+                operand2,
+                variant,
+            } => {
+                let op1 = self.read_register(*operand1, *variant);
+                let op2 = match variant {
+                    SizeVariant::Reg32 => self.module.const_(*operand2 as i32),
+                    SizeVariant::Reg64 => self.module.const_(*operand2 as i64),
+                };
+
+                let (binary_op, set_flags) = match op {
+                    LogicalOp::And { set_flags } => (
+                        match variant {
+                            SizeVariant::Reg32 => BinaryOp::AndInt32,
+                            SizeVariant::Reg64 => BinaryOp::AndInt64,
+                        },
+                        *set_flags,
+                    ),
+                    LogicalOp::Or => (
+                        match variant {
+                            SizeVariant::Reg32 => BinaryOp::OrInt32,
+                            SizeVariant::Reg64 => BinaryOp::OrInt64,
+                        },
+                        false,
+                    ),
+                    LogicalOp::Xor => (
+                        match variant {
+                            SizeVariant::Reg32 => BinaryOp::XorInt32,
+                            SizeVariant::Reg64 => BinaryOp::XorInt64,
+                        },
+                        false,
+                    ),
+                };
+
+                let get_arith = || {
+                    let op1 = self.read_register(*operand1, *variant);
+                    let op2 = match variant {
+                        SizeVariant::Reg32 => self.module.const_(*operand2 as i32),
+                        SizeVariant::Reg64 => self.module.const_(*operand2 as i64),
+                    };
+
+                    self.module.binary(op1, op2, binary_op)
+                };
+
+                block_exprs.push(self.write_register(
+                    *destination,
+                    *variant,
+                    self.module.binary(op1, op2, binary_op),
+                ));
+
+                if set_flags {
+                    // N flag: result < 0 (signed)
+                    let sign_expr = match variant {
+                        SizeVariant::Reg32 => self.module.binary(
+                            get_arith(),
+                            self.module.const_(0i32),
+                            BinaryOp::LtSInt32,
+                        ),
+                        SizeVariant::Reg64 => self.module.binary(
+                            get_arith(),
+                            self.module.const_(0i64),
+                            BinaryOp::LtSInt64,
+                        ),
+                    };
+                    block_exprs.push(self.write_flag(Flag::Negative, sign_expr));
+
+                    // Z flag: result == 0
+                    let zero_expr = match variant {
+                        SizeVariant::Reg32 => self.module.binary(
+                            get_arith(),
+                            self.module.const_(0i32),
+                            BinaryOp::EqInt32,
+                        ),
+                        SizeVariant::Reg64 => self.module.binary(
+                            get_arith(),
+                            self.module.const_(0i64),
+                            BinaryOp::EqInt64,
+                        ),
+                    };
+                    block_exprs.push(self.write_flag(Flag::Zero, zero_expr));
+
+                    // C and V flags are always cleared by logical operations
+                    block_exprs.push(self.write_flag(Flag::Carry, self.module.const_(0i32)));
+                    block_exprs.push(self.write_flag(Flag::Overflow, self.module.const_(0i32)));
                 }
             }
 
