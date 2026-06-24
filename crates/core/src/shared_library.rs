@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::analysis::ElfFile;
 
 // Relevant sections
@@ -17,10 +19,32 @@ pub struct NeededLibrary {
 
 #[derive(Debug)]
 pub struct Symbol {
-    name: String,
+    pub name: String,
+    pub variant: SymbolVariant,
 }
 
-pub fn analyze_shared_library(elf_file: ElfFile) -> Result<(), Box<dyn std::error::Error>> {
+#[derive(Debug)]
+pub struct SharedLibraryAnalysis {
+    pub needed_libraries: Vec<NeededLibrary>,
+    pub symbols: Vec<Symbol>,
+}
+
+#[derive(Debug)]
+pub enum SymbolVariant {
+    Local,
+    Global,
+    Versioned(VersionReference),
+}
+
+#[derive(Debug, Clone)]
+pub struct VersionReference {
+    library_index: usize,
+    relative_index: usize,
+}
+
+pub fn analyze_shared_library(
+    elf_file: ElfFile,
+) -> Result<SharedLibraryAnalysis, Box<dyn std::error::Error>> {
     let dynamic_table = elf_file.dynamic()?.unwrap();
     let (dynamic_symbol_table, dynamic_symbol_string_table) =
         elf_file.dynamic_symbol_table()?.unwrap();
@@ -37,218 +61,108 @@ pub fn analyze_shared_library(elf_file: ElfFile) -> Result<(), Box<dyn std::erro
             .find(|section| section.sh_type == elf::abi::SHT_GNU_VERSYM)
     });
 
-    let symbols = versym_section
-        .map(|versym_section| -> Result<Vec<Symbol>, Box<dyn std::error::Error>> {
-            let (versym_data, _) = elf_file.section_data(&versym_section)?;
-            let versym_table = elf::gnu_symver::VersionIndexTable::new(
-                elf_file.ehdr.endianness,
-                elf_file.ehdr.class,
-                versym_data,
-            );
+    let mut needed_libraries = Vec::<NeededLibrary>::new();
+    let mut vernaux_to_needed_library_index = HashMap::<u16, VersionReference>::new();
 
-            Ok(dynamic_symbol_table
-                .iter()
-                .enumerate()
-                .map(|(symbol_index, symbol)| {
-                    let symbol_name = dynamic_symbol_string_table
-                        .get(symbol.st_name as usize)
-                        .unwrap_or("<unknown>");
-
-                    match versym_table.get(symbol_index) {
-                        Ok(version_index) => {
-                            eprintln!(
-                                "Version symbol: sym_index: {}, name: {}, version: {}, hidden: {}, local: {}, global: {}",
-                                symbol_index,
-                                symbol_name,
-                                version_index.index(),
-                                version_index.is_hidden(),
-                                version_index.is_local(),
-                                version_index.is_global(),
-                            );
-                        }
-                        Err(_) => {
-                            eprintln!(
-                                "Version symbol: sym_index: {}, name: {}, version: <missing>",
-                                symbol_index, symbol_name
-                            );
-                        }
-                    }
-
-                    todo!()
-                })
-                .collect::<Vec<_>>())
-        })
-        .transpose()?;
-
-    let verneed_section = elf_file.section_headers().and_then(|sections| {
+    if let Some(verneed_section) = elf_file.section_headers().and_then(|sections| {
         sections
             .iter()
             .find(|section| section.sh_type == elf::abi::SHT_GNU_VERNEED)
-    });
+    }) {
+        let (verneed_data, _) = elf_file.section_data(&verneed_section)?;
+        let linked_strtab_header = elf_file
+            .section_headers()
+            .unwrap()
+            .get(verneed_section.sh_link as usize)?;
+        let verneed_strings = elf_file.section_data_as_strtab(&linked_strtab_header)?;
 
-    let needed_libraries = verneed_section
-        .map(
-            |verneed_section| -> Result<Vec<NeededLibrary>, Box<dyn std::error::Error>> {
-                let (verneed_data, _) = elf_file.section_data(&verneed_section)?;
-                let linked_strtab_header = elf_file
-                    .section_headers()
-                    .unwrap()
-                    .get(verneed_section.sh_link as usize)?;
-                let verneed_strings = elf_file.section_data_as_strtab(&linked_strtab_header)?;
+        for (verneed, vernaux_iter) in elf::gnu_symver::VerNeedIterator::new(
+            elf_file.ehdr.endianness,
+            elf_file.ehdr.class,
+            verneed_section.sh_info as u64,
+            0,
+            verneed_data,
+        ) {
+            let needed_library_index = needed_libraries.len();
+            let mut versions = Vec::<String>::new();
 
-                Ok(elf::gnu_symver::VerNeedIterator::new(
-                    elf_file.ehdr.endianness,
-                    elf_file.ehdr.class,
-                    verneed_section.sh_info as u64,
-                    0,
-                    verneed_data,
-                )
-                .map(|(verneed, vernaux_iter)| {
-                    let aux_names = vernaux_iter
-                        .filter_map(|vernaux| {
-                            verneed_strings
-                                .get(vernaux.vna_name as usize)
-                                .ok()
-                                .map(str::to_string)
-                        })
-                        .collect::<Vec<_>>();
+            for (relative_index, vernaux) in vernaux_iter.enumerate() {
+                let version = verneed_strings
+                    .get(vernaux.vna_name as usize)
+                    .unwrap_or("<unknown>")
+                    .to_string();
+                versions.push(version);
 
-                    NeededLibrary {
-                        name: verneed_strings
-                            .get(verneed.vn_file as usize)
-                            .unwrap_or("<unknown>")
-                            .to_string(),
-                        versions: aux_names,
-                    }
-                })
-                .collect::<Vec<_>>())
-            },
-        )
-        .transpose()?;
-
-    for entry in dynamic_table {
-        match entry.d_tag {
-            elf::abi::DT_NEEDED => {
-                let x = dynamic_symbol_string_table.get(entry.d_val() as usize)?;
-                // eprintln!("Needed shared library: {:?}", x);
-                // needed_shared_libraries.push();
+                vernaux_to_needed_library_index.insert(
+                    vernaux.vna_other,
+                    VersionReference {
+                        library_index: needed_library_index,
+                        relative_index,
+                    },
+                );
             }
-            elf::abi::DT_VERNEED => {
-                eprintln!("Version needed: {}", entry.d_val());
-            }
-            elf::abi::DT_VERSYM => {
-                eprintln!("Version definition: {}", entry.d_val());
-            }
-            // elf::abi::DT_RPATH => {
-            //     eprintln!("RPATH: {}", elf_file.dynstrtab()?.get(entry.d_val() as usize)?);
-            // }
-            // elf::abi::DT_RUNPATH => {
-            //     eprintln!("RUNPATH: {}", elf_file.dynstrtab()?.get(entry.d_val() as usize)?);
-            // }
-            _ => {}
+
+            needed_libraries.push(NeededLibrary {
+                name: verneed_strings
+                    .get(verneed.vn_file as usize)
+                    .unwrap_or("<unknown>")
+                    .to_string(),
+                versions,
+            });
         }
     }
 
-    eprintln!("Needed library names: {:?}", needed_library_names);
-    eprintln!("Needed libraries: {:#?}", needed_libraries);
+    let symbols = versym_section
+        .map(
+            |versym_section| -> Result<Vec<Symbol>, Box<dyn std::error::Error>> {
+                let (versym_data, _) = elf_file.section_data(&versym_section)?;
+                let versym_table = elf::gnu_symver::VersionIndexTable::new(
+                    elf_file.ehdr.endianness,
+                    elf_file.ehdr.class,
+                    versym_data,
+                );
 
-    // if let Some(section_headers) = elf_file.section_headers() {
-    //     for versym_section in section_headers
-    //         .iter()
-    //         .filter(|section| section.sh_type == elf::abi::SHT_GNU_VERSYM)
-    //     {
-    //         let (versym_data, _) = elf_file.section_data(&versym_section)?;
-    //         let versym_table = elf::gnu_symver::VersionIndexTable::new(
-    //             elf_file.ehdr.endianness,
-    //             elf_file.ehdr.class,
-    //             versym_data,
-    //         );
+                Ok(dynamic_symbol_table
+                    .iter()
+                    .zip(versym_table.iter())
+                    .filter_map(|(symbol, version_index)| {
+                        if symbol.st_symtype() == elf::abi::STT_NOTYPE
+                            || symbol.st_symtype() == elf::abi::STT_SECTION
+                            || symbol.st_shndx == elf::abi::SHN_ABS
+                        {
+                            return None;
+                        }
 
-    //         for (symbol_index, symbol) in dynamic_symbol_table.iter().enumerate() {
-    //             let symbol_name = dynamic_symbol_string_table
-    //                 .get(symbol.st_name as usize)
-    //                 .unwrap_or("<unknown>");
+                        let symbol_name = dynamic_symbol_string_table
+                            .get(symbol.st_name as usize)
+                            .unwrap_or("<unknown>")
+                            .to_string();
 
-    //             match versym_table.get(symbol_index) {
-    //                 Ok(version_index) => {
-    //                     eprintln!(
-    //                         "Version symbol: sym_index: {}, name: {}, version: {}, hidden: {}, local: {}, global: {}",
-    //                         symbol_index,
-    //                         symbol_name,
-    //                         version_index.index(),
-    //                         version_index.is_hidden(),
-    //                         version_index.is_local(),
-    //                         version_index.is_global(),
-    //                     );
-    //                 }
-    //                 Err(_) => {
-    //                     eprintln!(
-    //                         "Version symbol: sym_index: {}, name: {}, version: <missing>",
-    //                         symbol_index, symbol_name
-    //                     );
-    //                     break;
-    //                 }
-    //             }
-    //         }
-    //     }
+                        let variant = if version_index.is_local() {
+                            SymbolVariant::Local
+                        } else if version_index.is_global() {
+                            SymbolVariant::Global
+                        } else if let Some(version_reference) =
+                            vernaux_to_needed_library_index.get(&version_index.index())
+                        {
+                            SymbolVariant::Versioned(version_reference.clone())
+                        } else {
+                            SymbolVariant::Global
+                        };
 
-    //     for verneed_section in section_headers
-    //         .iter()
-    //         .filter(|section| section.sh_type == elf::abi::SHT_GNU_VERNEED)
-    //     {
-    //         let (verneed_data, _) = elf_file.section_data(&verneed_section)?;
-    //         let linked_strtab_header = section_headers.get(verneed_section.sh_link as usize)?;
-    //         let verneed_strings = elf_file.section_data_as_strtab(&linked_strtab_header)?;
+                        Some(Symbol {
+                            name: symbol_name,
+                            variant,
+                        })
+                    })
+                    .collect::<Vec<_>>())
+            },
+        )
+        .transpose()?
+        .unwrap_or_default();
 
-    //         for (verneed, vernaux_iter) in elf::gnu_symver::VerNeedIterator::new(
-    //             elf_file.ehdr.endianness,
-    //             elf_file.ehdr.class,
-    //             verneed_section.sh_info as u64,
-    //             0,
-    //             verneed_data,
-    //         ) {
-    //             let aux_names = vernaux_iter
-    //                 .filter_map(|vernaux| {
-    //                     verneed_strings
-    //                         .get(vernaux.vna_name as usize)
-    //                         .ok()
-    //                         .map(str::to_string)
-    //                 })
-    //                 .collect::<Vec<_>>();
-
-    //             eprintln!(
-    //                 "Version needed: index: {}, file: {}, names: {:?}",
-    //                 verneed.vn_cnt,
-    //                 verneed_strings
-    //                     .get(verneed.vn_file as usize)
-    //                     .unwrap_or("<unknown>"),
-    //                 aux_names
-    //             );
-    //         }
-
-    //         // for (verdef, verdaux_iter) in gnu_symver::VerDefIterator::new(
-    //         //     elf_file.ehdr.endianness,
-    //         //     elf_file.ehdr.class,
-    //         //     verdef_section.sh_info as u64,
-    //         //     0,
-    //         //     verdef_data,
-    //         // ) {
-    //         //     let aux_names = verdaux_iter
-    //         //         .filter_map(|verdaux| {
-    //         //             verdef_strings
-    //         //                 .get(verdaux.vda_name as usize)
-    //         //                 .ok()
-    //         //                 .map(str::to_string)
-    //         //         })
-    //         //         .collect::<Vec<_>>();
-
-    //         //     eprintln!(
-    //         //         "Version definition: index: {}, flags: {}, hash: {}, names: {:?}",
-    //         //         verdef.vd_ndx, verdef.vd_flags, verdef.vd_hash, aux_names
-    //         //     );
-    //         // }
-    //     }
-    // }
-
-    Ok(())
+    Ok(SharedLibraryAnalysis {
+        needed_libraries,
+        symbols,
+    })
 }
