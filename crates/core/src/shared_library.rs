@@ -12,34 +12,42 @@ use crate::analysis::ElfFile;
 //    .gnu.version_d
 
 #[derive(Debug)]
-pub struct NeededLibrary {
-    name: String,
-    versions: Vec<String>,
+pub struct LibraryVersion {
+    pub kind: LibraryVersionKind,
+    pub soname: String,
+    pub version: String,
+}
+
+#[derive(Debug)]
+pub enum LibraryVersionKind {
+    Exported,
+    Imported,
 }
 
 #[derive(Debug)]
 pub struct Symbol {
     pub name: String,
-    pub variant: SymbolVariant,
+    pub kind: SymbolKind,
+}
+
+#[derive(Debug)]
+pub enum SymbolKind {
+    Local,
+    Exported {
+        address: u64,
+        version_index: Option<usize>,
+    },
+    Imported {
+        version_index: Option<usize>,
+        weak: bool,
+    },
 }
 
 #[derive(Debug)]
 pub struct SharedLibraryAnalysis {
-    pub needed_libraries: Vec<NeededLibrary>,
+    pub library_versions: Vec<LibraryVersion>,
+    pub soname: Option<String>,
     pub symbols: Vec<Symbol>,
-}
-
-#[derive(Debug)]
-pub enum SymbolVariant {
-    Local,
-    Global,
-    Versioned(VersionReference),
-}
-
-#[derive(Debug, Clone)]
-pub struct VersionReference {
-    library_index: usize,
-    relative_index: usize,
 }
 
 pub fn analyze_shared_library(
@@ -49,7 +57,7 @@ pub fn analyze_shared_library(
     let (dynamic_symbol_table, dynamic_symbol_string_table) =
         elf_file.dynamic_symbol_table()?.unwrap();
 
-    let needed_library_names = dynamic_table
+    let imported_library_names = dynamic_table
         .iter()
         .filter(|entry| entry.d_tag == elf::abi::DT_NEEDED)
         .map(|entry| dynamic_symbol_string_table.get(entry.d_val() as usize))
@@ -61,8 +69,56 @@ pub fn analyze_shared_library(
             .find(|section| section.sh_type == elf::abi::SHT_GNU_VERSYM)
     });
 
-    let mut needed_libraries = Vec::<NeededLibrary>::new();
-    let mut vernaux_to_needed_library_index = HashMap::<u16, VersionReference>::new();
+    let mut library_versions = Vec::<LibraryVersion>::new();
+    let mut library_versions_map = HashMap::<u16, usize>::new();
+    let mut self_soname = None;
+
+    if let Some(verdef_section) = elf_file.section_headers().and_then(|sections| {
+        sections
+            .iter()
+            .find(|section| section.sh_type == elf::abi::SHT_GNU_VERDEF)
+    }) {
+        let (verdef_data, _) = elf_file.section_data(&verdef_section)?;
+        let linked_strtab_header = elf_file
+            .section_headers()
+            .unwrap()
+            .get(verdef_section.sh_link as usize)?;
+        let verdef_strings = elf_file.section_data_as_strtab(&linked_strtab_header)?;
+
+        for (verdef, mut verdaux_iter) in elf::gnu_symver::VerDefIterator::new(
+            elf_file.ehdr.endianness,
+            elf_file.ehdr.class,
+            verdef_section.sh_info as u64,
+            0,
+            verdef_data,
+        ) {
+            let first_verdaux = verdaux_iter.next().unwrap();
+            let soname = verdef_strings
+                .get(first_verdaux.vda_name as usize)
+                .unwrap()
+                .to_string();
+
+            if verdef.vd_flags & elf::abi::VER_FLG_BASE != 0 {
+                self_soname = Some(soname);
+            } else {
+                library_versions_map.insert(verdef.vd_ndx, library_versions.len());
+
+                library_versions.push(LibraryVersion {
+                    kind: LibraryVersionKind::Exported,
+                    soname,
+                    version: verdef_strings
+                        .get(
+                            verdaux_iter
+                                .next()
+                                .map(|verdaux| verdaux.vda_name as usize)
+                                .unwrap_or(0),
+                        )
+                        .unwrap_or("<unknown>")
+                        .to_string(),
+                });
+            }
+        }
+    }
 
     if let Some(verneed_section) = elf_file.section_headers().and_then(|sections| {
         sections
@@ -83,32 +139,21 @@ pub fn analyze_shared_library(
             0,
             verneed_data,
         ) {
-            let needed_library_index = needed_libraries.len();
-            let mut versions = Vec::<String>::new();
-
             for (relative_index, vernaux) in vernaux_iter.enumerate() {
-                let version = verneed_strings
-                    .get(vernaux.vna_name as usize)
-                    .unwrap_or("<unknown>")
-                    .to_string();
-                versions.push(version);
+                library_versions_map.insert(vernaux.vna_other, library_versions.len());
 
-                vernaux_to_needed_library_index.insert(
-                    vernaux.vna_other,
-                    VersionReference {
-                        library_index: needed_library_index,
-                        relative_index,
-                    },
-                );
+                library_versions.push(LibraryVersion {
+                    kind: LibraryVersionKind::Imported,
+                    soname: verneed_strings
+                        .get(verneed.vn_file as usize)
+                        .unwrap_or("<unknown>")
+                        .to_string(),
+                    version: verneed_strings
+                        .get(vernaux.vna_name as usize)
+                        .unwrap_or("<unknown>")
+                        .to_string(),
+                });
             }
-
-            needed_libraries.push(NeededLibrary {
-                name: verneed_strings
-                    .get(verneed.vn_file as usize)
-                    .unwrap_or("<unknown>")
-                    .to_string(),
-                versions,
-            });
         }
     }
 
@@ -138,21 +183,29 @@ pub fn analyze_shared_library(
                             .unwrap_or("<unknown>")
                             .to_string();
 
-                        let variant = if version_index.is_local() {
-                            SymbolVariant::Local
-                        } else if version_index.is_global() {
-                            SymbolVariant::Global
-                        } else if let Some(version_reference) =
-                            vernaux_to_needed_library_index.get(&version_index.index())
-                        {
-                            SymbolVariant::Versioned(version_reference.clone())
+                        let address =
+                            (symbol.st_shndx != elf::abi::SHN_UNDEF).then_some(symbol.st_value);
+
+                        let raw_version_index = version_index.index();
+                        let version_index = (raw_version_index != elf::abi::VER_NDX_LOCAL
+                            && raw_version_index != elf::abi::VER_NDX_GLOBAL)
+                            .then_some(raw_version_index as usize);
+
+                        let kind = if let Some(address) = address {
+                            SymbolKind::Exported {
+                                address,
+                                version_index,
+                            }
                         } else {
-                            SymbolVariant::Global
+                            SymbolKind::Imported {
+                                version_index,
+                                weak: symbol.st_bind() == elf::abi::STB_WEAK,
+                            }
                         };
 
                         Some(Symbol {
                             name: symbol_name,
-                            variant,
+                            kind,
                         })
                     })
                     .collect::<Vec<_>>())
@@ -162,7 +215,8 @@ pub fn analyze_shared_library(
         .unwrap_or_default();
 
     Ok(SharedLibraryAnalysis {
-        needed_libraries,
+        library_versions,
+        soname: self_soname,
         symbols,
     })
 }
