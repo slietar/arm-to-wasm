@@ -1,13 +1,15 @@
+use std::ffi::CString;
+
 use crate::{
     analysis::{ElfFile, Routine},
-    constants::INSTRUCTION_SIZE,
-    module::{BinaryOp, Expression, Module, UnaryOp},
+    constants::{INSTRUCTION_SIZE, PAGE_SIZE},
 };
 use arm_decoder::{
     instructions::Instruction,
     structures::{Condition, Register, SizeVariant},
 };
 use binaryen::ffi as by;
+use binaryen_module::{BinaryOp, Expression, Module, Type, UnaryOp};
 use elf::ElfBytes;
 
 pub const GENERAL_PURPOSE_REGISTER_COUNT: u32 = 32;
@@ -139,7 +141,7 @@ impl RoutineContext {
 impl RoutineContext {
     pub fn translate_instruction(
         &self,
-        instruction: Instruction,
+        instruction: &Instruction,
         block_exprs: &mut Vec<Expression>,
     ) {
         match instruction {
@@ -167,14 +169,14 @@ pub const SVC_RETURN_REGISTERS: [Register; 2] = [Register::X0, Register::X1];
 struct GlobalContext {
     module: Module,
     svc_function_name: String,
-    svc_return_type: by::BinaryenType,
+    svc_return_type: Type,
 }
 
 impl GlobalContext {
     pub fn translate_elf(bytes: &[u8]) -> Result<Module, Box<dyn std::error::Error>> {
         // TODO: Avoid redundancy
         let elf_file = ElfFile::minimal_parse(bytes)?;
-        let analysis = crate::analysis::analyze(bytes, elf_file)?;
+        let analysis = crate::analysis::analyze(bytes, &elf_file)?;
 
         let module = Module::new();
 
@@ -207,13 +209,13 @@ impl GlobalContext {
             &(std::iter::once(module.i32())
                 .chain(SVC_PARAM_REGISTERS.iter().map(|_| module.i64()))
                 .collect::<Vec<_>>()),
-            svc_return_type,
+            svc_return_type.clone(),
         );
 
-        let memory_info = set_up_memory("memory", bytes, elf_file, &module);
+        let memory_info = set_up_memory("memory", bytes, &elf_file, &module);
 
         let context = Self {
-            module,
+            module: module.clone(),
             svc_function_name: svc_function_name.to_string(),
             svc_return_type,
         };
@@ -222,8 +224,6 @@ impl GlobalContext {
             let function_name = &function_names[routine_index];
             context.translate_routine(routine, function_name);
         }
-
-        let module = context.module;
 
         if let Some(entry_routine_index) = analysis.entry_routine_index {
             // TODO: Avoid redundancy
@@ -328,13 +328,13 @@ impl GlobalContext {
             local_types.extend((0..GENERAL_PURPOSE_REGISTER_COUNT).map(|_| module.i64()));
 
             // Additional locals for temporary values
-            local_types.push(return_type);
-            local_types.push(self.svc_return_type);
+            local_types.push(return_type.clone());
+            local_types.push(self.svc_return_type.clone());
 
             local_types
         };
 
-        let mut relooper = module.relooper();
+        let relooper = module.relooper();
 
         let context = RoutineContext {
             param_count,
@@ -344,10 +344,11 @@ impl GlobalContext {
         let mut routine_exprs = Vec::new();
 
         for (param_index, param_register) in param_registers.iter().enumerate() {
-            routine_exprs.push(module.local_set(
-                param_count + get_reg_local_index(*param_register),
-                module.local_get(param_index as u32, module.i64()),
-            ));
+            // routine_exprs.push(module.local_set(
+            //     param_count + get_reg_local_index(*param_register),
+            //     module.local_get(param_index as u32, module.i64()),
+            // ));
+            // TODO
         }
 
         let mut relooper_blocks = Vec::new();
@@ -359,7 +360,7 @@ impl GlobalContext {
                 let current_address =
                     block.start_address + (instruction_index as u64) * INSTRUCTION_SIZE;
 
-                context.translate_instruction(*instruction, &mut block_exprs);
+                context.translate_instruction(instruction, &mut block_exprs);
             }
 
             if block.fallthrough_block_index.is_none() && block.jump_block_index.is_none() {
@@ -420,7 +421,6 @@ impl GlobalContext {
                             (false, SizeVariant::Reg64) => BinaryOp::NeInt64,
                             (true, SizeVariant::Reg32) => BinaryOp::EqInt32,
                             (true, SizeVariant::Reg64) => BinaryOp::EqInt64,
-                            _ => unreachable!(),
                         },
                     )),
                     _ => todo!(),
@@ -453,5 +453,107 @@ impl GlobalContext {
             &local_types,
             func_block,
         );
+    }
+}
+
+#[derive(Debug)]
+struct MappedSegment<'a> {
+    address: u64,
+    data: &'a [u8],
+    size: u64,
+    writable: bool,
+}
+
+#[derive(Debug)]
+pub struct MemoryInfo {
+    pub name: CString,
+    pub stack_internal_address: u64,
+    pub stack_size: u64,
+}
+
+pub fn set_up_memory(
+    memory_name: &str,
+    elf_bytes: &[u8],
+    elf_file: &ElfFile,
+    module: &Module,
+) -> MemoryInfo {
+    let mut mapped_segments = Vec::new();
+
+    for segment in elf_file.segments().unwrap() {
+        // eprintln!("Segment: {:?}", segment);
+
+        if segment.p_type == elf::abi::PT_LOAD {
+            mapped_segments.push(MappedSegment {
+                address: segment.p_vaddr,
+                data: &elf_bytes
+                    [(segment.p_offset as usize)..(segment.p_offset + segment.p_filesz) as usize],
+                size: segment.p_filesz,
+                writable: (segment.p_flags & elf::abi::PF_W) != 0,
+            });
+        }
+    }
+
+    let total_mapped_size = mapped_segments
+        .iter()
+        .map(|seg| seg.address + seg.size)
+        .max()
+        .unwrap_or(0)
+        .div_ceil(PAGE_SIZE as u64)
+        * PAGE_SIZE as u64;
+
+    let segment_names = mapped_segments
+        .iter()
+        .enumerate()
+        .map(|(i, _)| CString::new(format!("segment_{}", i)).unwrap())
+        .collect::<Vec<_>>();
+
+    let mut segment_name_ptrs = segment_names.iter().map(|s| s.as_ptr()).collect::<Vec<_>>();
+
+    let mut segment_datas = mapped_segments
+        .iter()
+        .map(|seg| seg.data.as_ptr())
+        .collect::<Vec<_>>();
+
+    let mut segment_passives = vec![false; mapped_segments.len()];
+
+    let mut segment_offsets = mapped_segments
+        .iter()
+        .map(|seg| unsafe { module.const_(seg.address).unsafe_ptr() })
+        .collect::<Vec<_>>();
+
+    let mut segment_sizes = mapped_segments
+        .iter()
+        .map(|seg| seg.size as u32)
+        .collect::<Vec<_>>();
+
+    let mapped_memory_page_count = total_mapped_size.div_ceil(PAGE_SIZE);
+    let mapped_memory_size = mapped_memory_page_count * PAGE_SIZE;
+    let stack_memory_page_count = 2;
+    let stack_memory_internal_address = mapped_memory_size;
+
+    let memory_name = CString::new(memory_name).unwrap();
+
+    unsafe {
+        by::BinaryenSetMemory(
+            module.unsafe_ptr(),
+            (mapped_memory_page_count + stack_memory_page_count) as u32,
+            u32::MAX,
+            memory_name.as_ptr(),
+            segment_name_ptrs.as_mut_ptr() as *mut *const i8,
+            segment_datas.as_mut_ptr() as *mut *const i8,
+            segment_passives.as_mut_ptr(),
+            segment_offsets.as_mut_ptr(),
+            segment_sizes.as_mut_ptr(),
+            mapped_segments.len() as u32,
+            false,
+            true,
+            memory_name.as_ptr(),
+        );
+    }
+
+    MemoryInfo {
+        name: memory_name,
+        stack_internal_address: stack_memory_internal_address,
+        stack_size: stack_memory_page_count * PAGE_SIZE,
     }
 }

@@ -6,11 +6,9 @@ mod analysis;
 mod constants;
 mod decoding;
 mod instruction_helper;
-// mod instructions;
-mod module;
 mod shared_library;
 // mod translation;
-// mod translator;
+mod translator;
 
 use clap::Parser;
 use std::path::PathBuf;

@@ -67,7 +67,7 @@ struct StackAccess {
 
 pub fn analyze(
     elf_bytes: &[u8],
-    elf_file: ElfFile,
+    elf_file: &ElfFile,
 ) -> Result<Analysis, Box<dyn std::error::Error>> {
     let (section_headers_opt, section_name_table_opt) = elf_file.section_headers_with_strtab()?;
     let section_headers = section_headers_opt
@@ -605,7 +605,7 @@ pub fn analyze(
 
 pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let elf_file = ElfFile::minimal_parse(elf_bytes)?;
-    let analysis = analyze(elf_bytes, elf_file)?;
+    let analysis = analyze(elf_bytes, &elf_file)?;
 
     eprintln!("{:#?}", analysis);
 
