@@ -8,7 +8,8 @@ use elf::{ElfBytes, gnu_symver};
 use crate::{
     constants::INSTRUCTION_SIZE,
     instruction_helper::InstructionInfo as _,
-    instructions::{Address, AddressingMode, Instruction, Register, SizeVariant, SizedRegister}, shared_library,
+    instructions::{Address, AddressingMode, Instruction, Register, SizeVariant, SizedRegister},
+    shared_library,
 };
 
 pub type ElfFile<'a> = ElfBytes<'a, elf::endian::AnyEndian>;
@@ -632,38 +633,13 @@ pub fn analyze(
 pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let elf_file = ElfFile::minimal_parse(elf_bytes)?;
 
-    shared_library::analyze_shared_library(elf_file)?;
+    let shared_library_analysis = shared_library::analyze_shared_library(elf_file)?;
 
-    // let analysis = analyze(elf_bytes, elf_file)?;
-    // eprintln!("Analysis result: {:#?}", analysis);
+    println!("Libraries: {:#?}", shared_library_analysis.library_versions);
 
-    // let mut needed_shared_libraries = Vec::new();
-
-    // for symbol in dynamic_symbol_table {
-    //     eprintln!(
-    //         "Dynamic symbol: name: {}, value: {:#x}, size: {}, info: {}, other: {}, shndx: {}",
-    //         dynamic_symbol_string_table.get(symbol.st_name as usize)?,
-    //         symbol.st_value,
-    //         symbol.st_size,
-    //         symbol.st_info,
-    //         symbol.st_other,
-    //         symbol.st_shndx
-    //     );
-    // }
-
-    // for segment in elf_file.segments().unwrap().iter() {
-    //     eprintln!(
-    //         "Segment: type: {}, flags: {}, offset: {:#x}, vaddr: {:#x}, paddr: {:#x}, filesz: {:#x}, memsz: {:#x}, align: {}",
-    //         segment.p_type,
-    //         segment.p_flags,
-    //         segment.p_offset,
-    //         segment.p_vaddr,
-    //         segment.p_paddr,
-    //         segment.p_filesz,
-    //         segment.p_memsz,
-    //         segment.p_align
-    //     );
-    // }
+    for symbol in shared_library_analysis.symbols {
+        println!("{symbol:?}",);
+    }
 
     Ok(())
 }

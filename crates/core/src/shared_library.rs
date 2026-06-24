@@ -12,16 +12,15 @@ use crate::analysis::ElfFile;
 //    .gnu.version_d
 
 #[derive(Debug)]
-pub struct LibraryVersion {
-    pub kind: LibraryVersionKind,
-    pub soname: String,
-    pub version: String,
-}
-
-#[derive(Debug)]
-pub enum LibraryVersionKind {
-    Exported,
-    Imported,
+pub enum LibraryVersion {
+    Exported {
+        dependencies: Vec<String>,
+        version: String,
+    },
+    Imported {
+        soname: String,
+        version: String,
+    },
 }
 
 #[derive(Debug)]
@@ -85,36 +84,31 @@ pub fn analyze_shared_library(
             .get(verdef_section.sh_link as usize)?;
         let verdef_strings = elf_file.section_data_as_strtab(&linked_strtab_header)?;
 
-        for (verdef, mut verdaux_iter) in elf::gnu_symver::VerDefIterator::new(
+        for (verdef, verdaux_iter) in elf::gnu_symver::VerDefIterator::new(
             elf_file.ehdr.endianness,
             elf_file.ehdr.class,
             verdef_section.sh_info as u64,
             0,
             verdef_data,
         ) {
-            let first_verdaux = verdaux_iter.next().unwrap();
-            let soname = verdef_strings
-                .get(first_verdaux.vda_name as usize)
-                .unwrap()
-                .to_string();
+            let mut names = verdaux_iter
+                .map(|verdaux| {
+                    verdef_strings
+                        .get(verdaux.vda_name as usize)
+                        .unwrap()
+                        .to_string()
+                });
+
+            let first_name = names.next().unwrap();
 
             if verdef.vd_flags & elf::abi::VER_FLG_BASE != 0 {
-                self_soname = Some(soname);
+                self_soname = Some(first_name);
             } else {
                 library_versions_map.insert(verdef.vd_ndx, library_versions.len());
 
-                library_versions.push(LibraryVersion {
-                    kind: LibraryVersionKind::Exported,
-                    soname,
-                    version: verdef_strings
-                        .get(
-                            verdaux_iter
-                                .next()
-                                .map(|verdaux| verdaux.vda_name as usize)
-                                .unwrap_or(0),
-                        )
-                        .unwrap_or("<unknown>")
-                        .to_string(),
+                library_versions.push(LibraryVersion::Exported {
+                    dependencies: names.collect(),
+                    version: first_name,
                 });
             }
         }
@@ -142,15 +136,14 @@ pub fn analyze_shared_library(
             for (relative_index, vernaux) in vernaux_iter.enumerate() {
                 library_versions_map.insert(vernaux.vna_other, library_versions.len());
 
-                library_versions.push(LibraryVersion {
-                    kind: LibraryVersionKind::Imported,
+                library_versions.push(LibraryVersion::Imported {
                     soname: verneed_strings
                         .get(verneed.vn_file as usize)
-                        .unwrap_or("<unknown>")
+                        .unwrap()
                         .to_string(),
                     version: verneed_strings
                         .get(vernaux.vna_name as usize)
-                        .unwrap_or("<unknown>")
+                        .unwrap()
                         .to_string(),
                 });
             }
