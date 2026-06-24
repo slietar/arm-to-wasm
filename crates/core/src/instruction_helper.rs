@@ -1,10 +1,26 @@
-use crate::instructions::{
-    Address, AddressingMode, Instruction, Register, SizeVariant, SizedRegister,
+use arm_decoder::{
+    instructions::{
+        AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreOffset, LoadStoreOp,
+    },
+    structures::{Register, SizeVariant, SliceSize},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SizedRegister {
+    pub register: Register,
+    pub variant: SizeVariant,
+}
 
 pub trait InstructionInfo {
     fn registers_read(&self) -> Vec<SizedRegister>;
     fn registers_written(&self) -> Vec<SizedRegister>;
+}
+
+fn variant_for_slice_size(size: SliceSize) -> SizeVariant {
+    match size {
+        SliceSize::Doubleword => SizeVariant::Reg64,
+        SliceSize::Byte | SliceSize::Halfword | SliceSize::Word => SizeVariant::Reg32,
+    }
 }
 
 impl InstructionInfo for Instruction {
@@ -12,112 +28,135 @@ impl InstructionInfo for Instruction {
         use Instruction::*;
 
         match self {
-            AddImmediate {
+            AddSubtract {
+                operand1,
+                operand2,
+                variant,
+                ..
+            } => {
+                let mut regs = vec![SizedRegister {
+                    register: *operand1,
+                    variant: *variant,
+                }];
+
+                match operand2 {
+                    AddSubtractRightOperand::Immediate(_) => {}
+                    AddSubtractRightOperand::ShiftedRegister { register, .. }
+                    | AddSubtractRightOperand::ExtendedRegister { register, .. } => {
+                        regs.push(SizedRegister {
+                            register: *register,
+                            variant: *variant,
+                        });
+                    }
+                }
+
+                regs
+            }
+            LogicalImmediate {
+                operand1, variant, ..
+            } => vec![SizedRegister {
+                register: *operand1,
+                variant: *variant,
+            }],
+            LogicalShiftedRegister {
+                operand1,
+                operand2,
+                variant,
+                ..
+            } => vec![
+                SizedRegister {
+                    register: *operand1,
+                    variant: *variant,
+                },
+                SizedRegister {
+                    register: *operand2,
+                    variant: *variant,
+                },
+            ],
+            FormPCRelativeAddress { .. } => Vec::new(),
+            LoadStoreRegister {
+                address,
+                offset,
+                op,
+                size,
+                value,
+            } => {
+                let mut regs = vec![SizedRegister {
+                    register: *address,
+                    variant: SizeVariant::Reg64,
+                }];
+
+                if let LoadStoreOffset::Register { register, .. } = offset {
+                    regs.push(SizedRegister {
+                        register: *register,
+                        variant: SizeVariant::Reg64,
+                    });
+                }
+
+                if matches!(op, LoadStoreOp::Store) {
+                    regs.push(SizedRegister {
+                        register: *value,
+                        variant: variant_for_slice_size(*size),
+                    });
+                }
+
+                regs
+            }
+            LoadStorePairOfRegisters {
+                address,
+                op,
+                value1,
+                value2,
+                variant,
+                ..
+            } => {
+                let mut regs = vec![SizedRegister {
+                    register: *address,
+                    variant: SizeVariant::Reg64,
+                }];
+
+                if matches!(op, LoadStoreOp::Store) {
+                    regs.push(SizedRegister {
+                        register: *value1,
+                        variant: *variant,
+                    });
+                    regs.push(SizedRegister {
+                        register: *value2,
+                        variant: *variant,
+                    });
+                }
+
+                regs
+            }
+            MoveWide {
                 source, variant, ..
             } => vec![SizedRegister {
                 register: *source,
                 variant: *variant,
             }],
-            BitwiseOrShiftedRegister {
-                operand1,
-                operand2,
-                variant,
-                ..
-            } => vec![
-                SizedRegister {
-                    register: *operand1,
-                    variant: *variant,
-                },
-                SizedRegister {
-                    register: *operand2,
-                    variant: *variant,
-                },
-            ],
-            Branch { .. } => Vec::new(),
-            BranchConditionally { .. } => Vec::new(),
-            BranchWithLink { .. } => Vec::new(),
-            FormPCRelativeAddress { .. } => Vec::new(),
-            FormPCRelativeAddressToPage { destination, value } => Vec::new(),
-            LoadRegisterImmediate {
-                address, variant, ..
-            } => vec![SizedRegister {
-                register: address.base,
-                variant: SizeVariant::Reg64,
-            }],
-            MoveWideWithZero { .. } => Vec::new(),
             Nop => Vec::new(),
             Return { target } => vec![SizedRegister {
                 register: *target,
                 variant: SizeVariant::Reg64,
             }],
-            StoreRegisterImmediate {
-                address,
-                value,
-                variant,
+            UnconditionalBranch {
+                target: BranchTarget::Register(register),
                 ..
-            } => vec![
-                SizedRegister {
-                    register: address.base,
-                    variant: SizeVariant::Reg64,
-                },
-                SizedRegister {
-                    register: *value,
-                    variant: *variant,
-                },
-            ],
-            StoreRegisterHalfwordImmediate { address, value } => vec![
-                SizedRegister {
-                    register: address.base,
-                    variant: SizeVariant::Reg64,
-                },
-                SizedRegister {
-                    register: *value,
-                    variant: SizeVariant::Reg64, // TODO: Set to halfword
-                },
-            ],
-            StorePairOfRegisters {
-                address,
-                value1,
-                value2,
-                ..
-            } => vec![
-                SizedRegister {
-                    register: address.base,
-                    variant: SizeVariant::Reg64,
-                },
-                SizedRegister {
-                    register: *value1,
-                    variant: SizeVariant::Reg64,
-                },
-                SizedRegister {
-                    register: *value2,
-                    variant: SizeVariant::Reg64,
-                },
-            ],
-            StoreRegisterRegister {
-                base_address,
-                offset,
-                value,
-                ..
-            } => vec![
-                SizedRegister {
-                    register: *base_address,
-                    variant: SizeVariant::Reg64,
-                },
-                SizedRegister {
-                    register: *offset,
-                    variant: SizeVariant::Reg64,
-                },
-                SizedRegister {
-                    register: *value,
-                    variant: SizeVariant::Reg64,
-                },
-            ],
-            SubImmediate { source, .. } | SubsImmediate { source, .. } => vec![SizedRegister {
-                register: *source,
+            } => vec![SizedRegister {
+                register: *register,
                 variant: SizeVariant::Reg64,
             }],
-            SubShiftedRegister {
+            BranchConditionally { .. } => Vec::new(),
+            CompareAndBranch {
+                register, variant, ..
+            }
+            | TestBitAndBranch {
+                register, variant, ..
+            } => vec![SizedRegister {
+                register: *register,
+                variant: *variant,
+            }],
+            ConditionalSelect {
                 operand1,
                 operand2,
                 variant,
@@ -132,24 +171,47 @@ impl InstructionInfo for Instruction {
                     variant: *variant,
                 },
             ],
-            SupervisorCall { .. } => Vec::new(),
-            CompareAndBranchOnNonzero { value, variant, .. } => vec![SizedRegister {
-                register: *value,
+            BitfieldMove {
+                source, variant, ..
+            } => vec![SizedRegister {
+                register: *source,
                 variant: *variant,
             }],
-            CompareAndBranchOnZero { value, variant, .. } => vec![SizedRegister {
-                register: *value,
-                variant: *variant,
+            ConvertFPInteger {
+                operand,
+                integer_size,
+                ..
+            }
+            | FPMove {
+                operand,
+                integer_size,
+                ..
+            } => vec![SizedRegister {
+                register: *operand,
+                variant: *integer_size,
             }],
-            TestBitAndBranchIfNonzero { value, variant, .. } => vec![SizedRegister {
-                register: *value,
-                variant: *variant,
-            }],
-            TestBitAndBranchIfZero { value, variant, .. } => vec![SizedRegister {
-                register: *value,
-                variant: *variant,
-            }],
-            Unknown => Vec::new(),
+            FPProcessing {
+                operand1, operand2, ..
+            }
+            | SIMDTriple {
+                operand1, operand2, ..
+            } => vec![
+                SizedRegister {
+                    register: *operand1,
+                    variant: SizeVariant::Reg64,
+                },
+                SizedRegister {
+                    register: *operand2,
+                    variant: SizeVariant::Reg64,
+                },
+            ],
+            Breakpoint { .. }
+            | PrefetchMemory
+            | PermanentlyUndefined { .. }
+            | SupervisorCall { .. }
+            | LoadLiteral { .. }
+            | UnconditionalBranch { .. }
+            | Unknown => Vec::new(),
         }
     }
 
@@ -157,75 +219,32 @@ impl InstructionInfo for Instruction {
         use Instruction::*;
 
         match self {
-            AddImmediate {
-                destination,
-                variant,
-                ..
-            } => vec![SizedRegister {
-                register: *destination,
-                variant: *variant,
-            }],
-            BitwiseOrShiftedRegister {
-                destination,
-                variant,
-                ..
-            } => vec![SizedRegister {
-                register: *destination,
-                variant: *variant,
-            }],
-            Branch { .. } => Vec::new(),
-            BranchConditionally { .. } => Vec::new(),
-            BranchWithLink { .. } => Vec::new(),
-            FormPCRelativeAddress { destination, .. } => vec![SizedRegister {
-                register: *destination,
-                variant: SizeVariant::Reg64,
-            }],
-            FormPCRelativeAddressToPage { destination, value } => vec![SizedRegister {
-                register: *destination,
-                variant: SizeVariant::Reg64,
-            }],
-            LoadRegisterImmediate {
-                destination,
-                variant,
-                ..
-            } => vec![SizedRegister {
-                register: *destination,
-                variant: *variant,
-            }],
-            MoveWideWithZero {
-                destination,
-                variant,
-                ..
-            } => vec![SizedRegister {
-                register: *destination,
-                variant: *variant,
-            }],
-            Nop => Vec::new(),
-            Return { .. } => Vec::new(),
-            StoreRegisterImmediate {
-                address:
-                    Address {
-                        base,
-                        mode:
-                            AddressingMode::PreIndexWithWriteback { .. }
-                            | AddressingMode::PostIndexWithWriteback { .. },
-                    },
-                ..
-            } => vec![SizedRegister {
-                register: *base,
-                variant: SizeVariant::Reg64,
-            }],
-            // TODO: Add other writeback cases
-            StoreRegisterImmediate { .. } => Vec::new(),
-            StoreRegisterHalfwordImmediate { .. } => Vec::new(),
-            StorePairOfRegisters { .. } => Vec::new(),
-            StoreRegisterRegister { .. } => Vec::new(),
-            SubImmediate {
+            AddSubtract {
                 destination,
                 variant,
                 ..
             }
-            | SubsImmediate {
+            | LogicalImmediate {
+                destination,
+                variant,
+                ..
+            }
+            | LogicalShiftedRegister {
+                destination,
+                variant,
+                ..
+            }
+            | ConditionalSelect {
+                destination,
+                variant,
+                ..
+            }
+            | BitfieldMove {
+                destination,
+                variant,
+                ..
+            }
+            | MoveWide {
                 destination,
                 variant,
                 ..
@@ -233,20 +252,104 @@ impl InstructionInfo for Instruction {
                 register: *destination,
                 variant: *variant,
             }],
-            SubShiftedRegister {
-                destination,
+            FormPCRelativeAddress { destination, .. } => vec![SizedRegister {
+                register: *destination,
+                variant: SizeVariant::Reg64,
+            }],
+            LoadLiteral {
+                destination, size, ..
+            } => vec![SizedRegister {
+                register: *destination,
+                variant: variant_for_slice_size(*size),
+            }],
+            LoadStoreRegister {
+                address,
+                offset,
+                op,
+                size,
+                value,
+            } => {
+                let mut regs = Vec::new();
+
+                if let LoadStoreOffset::Immediate { offset } = offset
+                    && offset.writeback.is_some()
+                {
+                    regs.push(SizedRegister {
+                        register: *address,
+                        variant: SizeVariant::Reg64,
+                    });
+                }
+
+                if !matches!(op, LoadStoreOp::Store) {
+                    regs.push(SizedRegister {
+                        register: *value,
+                        variant: variant_for_slice_size(*size),
+                    });
+                }
+
+                regs
+            }
+            LoadStorePairOfRegisters {
+                address,
+                offset,
+                op,
+                value1,
+                value2,
                 variant,
+                ..
+            } => {
+                let mut regs = Vec::new();
+
+                if offset.writeback.is_some() {
+                    regs.push(SizedRegister {
+                        register: *address,
+                        variant: SizeVariant::Reg64,
+                    });
+                }
+
+                if !matches!(op, LoadStoreOp::Store) {
+                    regs.push(SizedRegister {
+                        register: *value1,
+                        variant: *variant,
+                    });
+                    regs.push(SizedRegister {
+                        register: *value2,
+                        variant: *variant,
+                    });
+                }
+
+                regs
+            }
+            ConvertFPInteger {
+                destination,
+                integer_size,
+                ..
+            }
+            | FPMove {
+                destination,
+                integer_size,
                 ..
             } => vec![SizedRegister {
                 register: *destination,
-                variant: *variant,
+                variant: *integer_size,
             }],
-            SupervisorCall { .. } => Vec::new(),
-            CompareAndBranchOnNonzero { .. } => Vec::new(),
-            CompareAndBranchOnZero { .. } => Vec::new(),
-            TestBitAndBranchIfNonzero { .. } => Vec::new(),
-            TestBitAndBranchIfZero { .. } => Vec::new(),
-            Unknown => Vec::new(),
+            FPProcessing { destination, .. } | SIMDTriple { destination, .. } => {
+                vec![SizedRegister {
+                    register: *destination,
+                    variant: SizeVariant::Reg64,
+                }]
+            }
+            Nop => Vec::new(),
+            Return { .. }
+            | SupervisorCall { .. }
+            | Breakpoint { .. }
+            | PrefetchMemory
+            | PermanentlyUndefined { .. }
+            | UnconditionalBranch { .. }
+            | BranchConditionally { .. }
+            | CompareAndBranch { .. }
+            | TestBitAndBranch { .. }
+            | Unknown => Vec::new(),
         }
     }
 }
