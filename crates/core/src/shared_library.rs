@@ -51,8 +51,15 @@ pub struct JumpRelocation {
 }
 
 #[derive(Debug)]
+pub struct RelativeRelocation {
+    addend: i64,
+    source_address: u64,
+}
+
+#[derive(Debug)]
 pub struct SharedLibraryAnalysis {
     pub jump_relocations: Vec<JumpRelocation>,
+    pub relative_relocations: Vec<RelativeRelocation>,
     pub library_versions: Vec<LibraryVersion>,
     pub soname: Option<String>,
     pub symbols: Vec<Symbol>,
@@ -231,6 +238,7 @@ pub fn analyze_shared_library(
         .unwrap();
 
     let mut jump_relocations = Vec::<JumpRelocation>::new();
+    let mut relative_relocations = Vec::<RelativeRelocation>::new();
 
     if let Some(sections) = elf_file.section_headers() {
         for section in sections.iter() {
@@ -240,21 +248,45 @@ pub fn analyze_shared_library(
 
                 if let Ok(relas) = elf_file.section_data_as_relas(&section) {
                     for (rela_index, rela) in relas.enumerate() {
-                        if rela.r_type == elf::abi::R_AARCH64_JUMP_SLOT {
-                            let address = plt_section.sh_addr + (rela_index as u64 + 2) * 4;
-                            let symbol_index = symbols
-                                .iter()
-                                .position(|symbol| {
-                                    symbol.dynamic_symbol_index == rela.r_sym as usize
-                                })
-                                .unwrap();
-                            eprintln!("{:?}", symbols[symbol_index]);
+                        match rela.r_type {
+                            elf::abi::R_AARCH64_JUMP_SLOT => {
+                                let address = plt_section.sh_addr + (rela_index as u64 + 2) * 4;
+                                let symbol_index = symbols
+                                    .iter()
+                                    .position(|symbol| {
+                                        symbol.dynamic_symbol_index == rela.r_sym as usize
+                                    })
+                                    .unwrap();
+                                eprintln!("{:?}", symbols[symbol_index]);
 
-                            jump_relocations.push(JumpRelocation {
-                                addend: rela.r_addend,
-                                symbol_index,
-                                source_address: address,
-                            });
+                                jump_relocations.push(JumpRelocation {
+                                    addend: rela.r_addend,
+                                    symbol_index,
+                                    source_address: address,
+                                });
+                            }
+                            // elf::abi::R_AARCH64_GLOB_DAT => {
+                            //     let symbol_index = symbols
+                            //         .iter()
+                            //         .position(|symbol| {
+                            //             symbol.dynamic_symbol_index == rela.r_sym as usize
+                            //         })
+                            //         .unwrap();
+                            //     eprintln!("{:?}", symbols[symbol_index]);
+
+                            //     jump_relocations.push(JumpRelocation {
+                            //         addend: rela.r_addend,
+                            //         symbol_index,
+                            //         source_address: rela.r_offset,
+                            //     });
+                            // }
+                            elf::abi::R_AARCH64_RELATIVE => {
+                                relative_relocations.push(RelativeRelocation {
+                                    addend: rela.r_addend,
+                                    source_address: rela.r_offset,
+                                });
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -264,6 +296,7 @@ pub fn analyze_shared_library(
 
     Ok(SharedLibraryAnalysis {
         jump_relocations,
+        relative_relocations,
         library_versions,
         soname: self_soname,
         symbols,
