@@ -1,4 +1,10 @@
-use crate::structures::{Arrangement, Condition, Extension, FPSize, Register, Shift, SizeVariant, SliceSize, Transform, WritebackOffset};
+use crate::{
+    structures::{
+        Arrangement, Condition, Extension, FPSize, Register, Shift, SizeVariant, SliceSize,
+        WritebackOffset,
+    },
+    utilities::INSTRUCTION_SIZE,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogicalOp {
@@ -123,115 +129,115 @@ pub enum ConvertFPIntegerOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FPProcessingOp {
-    Multiply, // FMUL
-    Divide, // FDIV
-    Add, // FADD
-    Subtract, // FSUB
-    Maximum, // FMAX
-    Minimum, // FMIN
-    MaximumNumber, // FMAXNM
-    MinimumNumber, // FMINNM
+    Multiply,        // FMUL
+    Divide,          // FDIV
+    Add,             // FADD
+    Subtract,        // FSUB
+    Maximum,         // FMAX
+    Minimum,         // FMIN
+    MaximumNumber,   // FMAXNM
+    MinimumNumber,   // FMINNM
     NegatedMultiply, // FNMUL
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SIMDTripleOp {
-    SignedHalvingAdd, // SHADD
-    SignedSaturatingAdd, // SQADD
+    SignedHalvingAdd,         // SHADD
+    SignedSaturatingAdd,      // SQADD
     SignedRoundingHalvingAdd, // SRHADD
-    SignedHalvingSubtract, // SHSUB
+    SignedHalvingSubtract,    // SHSUB
     SignedSaturatingSubtract, // SQSUB
 
     CompareSignedGT, // CMGT
     CompareSignedGE, // CMGE
 
-    SignedShiftLeft, // SSHL
-    SignedSaturatingShiftLeft, // SQSHL
-    SignedRoundingShiftLeft, // SRSHL
+    SignedShiftLeft,                   // SSHL
+    SignedSaturatingShiftLeft,         // SQSHL
+    SignedRoundingShiftLeft,           // SRSHL
     SignedSaturatingRoundingShiftLeft, // SQRSHL
 
     SignedMaximum, // SMAX
     SignedMinimum, // SMIN
 
-    SignedAbsoluteDifference, // SABD
+    SignedAbsoluteDifference,              // SABD
     SignedAbsoluteDifferenceAndAccumulate, // SABA
 
-    Add, // ADD
-    CompareBitwiseTestBitsNonzero, // CMTST
-    MultiplyAddAccumulate, // MLA
-    Multiply, // MUL
-    SignedMaximumPairwise, // SMAXP
-    SignedMinimumPairwise, // SMINP
+    Add,                                               // ADD
+    CompareBitwiseTestBitsNonzero,                     // CMTST
+    MultiplyAddAccumulate,                             // MLA
+    Multiply,                                          // MUL
+    SignedMaximumPairwise,                             // SMAXP
+    SignedMinimumPairwise,                             // SMINP
     SignedSaturatingDoublingMultiplyReturningHighHalf, // SQDMULH
-    AddPairwise, // ADDP
-    FPMaximumNumber, // FMAXNMP
-    FPMultiplyAddAccumulate, // FMLA
-    FPAdd, // FADD
-    FPMultiplyExtended, // FMULX
-    FPCompareEqual, // FCMEQ
-    FPMaximum, // FMAX
-    FPReciprocalStep, // FRECPS
-    BitwiseAnd, // AND
-    FPFusedMultiplyAddLongToAccumulator, // FMLAL, FMLAL2
-    BitwiseBitClear, // BIC
-    FPMinimumNumber, // FMINNMP
-    FPFusedMultiplySubtractFromAccumulator, // FMLS
-    FPSubtract, // FSUB
-    FPAbsoluteMaximum, // FAMAX
-    FPMinimum, // FMIN
-    FPReciprocalSquareRootStep, // FRSQRTS
-    BitwiseOr, // ORR
-    FPFusedMultiplySubtractLongFromAccumulator, // FMLSL, FMLSL2
-    BitwiseOrNot, // ORN
+    AddPairwise,                                       // ADDP
+    FPMaximumNumber,                                   // FMAXNMP
+    FPMultiplyAddAccumulate,                           // FMLA
+    FPAdd,                                             // FADD
+    FPMultiplyExtended,                                // FMULX
+    FPCompareEqual,                                    // FCMEQ
+    FPMaximum,                                         // FMAX
+    FPReciprocalStep,                                  // FRECPS
+    BitwiseAnd,                                        // AND
+    FPFusedMultiplyAddLongToAccumulator,               // FMLAL, FMLAL2
+    BitwiseBitClear,                                   // BIC
+    FPMinimumNumber,                                   // FMINNMP
+    FPFusedMultiplySubtractFromAccumulator,            // FMLS
+    FPSubtract,                                        // FSUB
+    FPAbsoluteMaximum,                                 // FAMAX
+    FPMinimum,                                         // FMIN
+    FPReciprocalSquareRootStep,                        // FRSQRTS
+    BitwiseOr,                                         // ORR
+    FPFusedMultiplySubtractLongFromAccumulator,        // FMLSL, FMLSL2
+    BitwiseOrNot,                                      // ORN
 
-    UnsignedHalvingAdd, // UHADD
-    UnsignedSaturatingAdd, // UQADD
+    UnsignedHalvingAdd,         // UHADD
+    UnsignedSaturatingAdd,      // UQADD
     UnsignedRoundingHalvingAdd, // URHADD
-    UnsignedHalvingSubtract, // UHSUB
+    UnsignedHalvingSubtract,    // UHSUB
     UnsignedSaturatingSubtract, // UQSUB
 
     CompareUnsignedGT, // CMHI
     CompareUnsignedGE, // CMHS
 
-    UnsignedShiftLeft, // USHL
-    UnsignedSaturatingShiftLeft, // UQSHL
-    UnsignedRoundingShiftLeft, // URSHL
+    UnsignedShiftLeft,                   // USHL
+    UnsignedSaturatingShiftLeft,         // UQSHL
+    UnsignedRoundingShiftLeft,           // URSHL
     UnsignedSaturatingRoundingShiftLeft, // UQRSHL
 
     UnsignedMaximum, // UMAX
     UnsignedMinimum, // UMIN
 
-    UnsignedAbsoluteDifference, // UABD
+    UnsignedAbsoluteDifference,              // UABD
     UnsignedAbsoluteDifferenceAndAccumulate, // UABA
 
-    Subtract, // SUB
-    CompareEqual, // CMEQ
-    MultiplySubtract, // MLS
-    PolynomialMultiply, // PMUL
-    UnsignedMaximumPairwise, // UMAXP
-    UnsignedMinimumPairwise, // UMINP
+    Subtract,                                                  // SUB
+    CompareEqual,                                              // CMEQ
+    MultiplySubtract,                                          // MLS
+    PolynomialMultiply,                                        // PMUL
+    UnsignedMaximumPairwise,                                   // UMAXP
+    UnsignedMinimumPairwise,                                   // UMINP
     SignedSaturatingRoundingDoublingMultiplyReturningHighHalf, // SQRDMULH
 
-    FPMaximumNumberPairwise, // FMAXNMP
-    FPAddPairwise, // FADDP
-    FPMultiply, // FMUL
-    FPCompareGE, // FCMGE
-    FPAbsoluteCompareGE, // FACGE
-    FPMaximumPairwise, // FMAXP
-    FPDivide, // FDIV
-    BitwiseXor, // EOR
-    FPFusedMultiplyAddLongToAccumulatorUpperHalf, // FMLAL2
-    BitwiseSelect, // BSL
-    FPMinimumNumberPairwise, // FMINNMP
-    FPAbsoluteDifference, // FABD
-    FPAbsoluteMinimum, // FAMIN
-    FPCompareGT, // FCMGT
-    FPAbsoluteCompareGT, // FACGT
-    FPMinimumPairwise, // FMINP
-    FPScale, // FSCALE
-    BitwiseInsertIfTrue, // BIT
+    FPMaximumNumberPairwise,                             // FMAXNMP
+    FPAddPairwise,                                       // FADDP
+    FPMultiply,                                          // FMUL
+    FPCompareGE,                                         // FCMGE
+    FPAbsoluteCompareGE,                                 // FACGE
+    FPMaximumPairwise,                                   // FMAXP
+    FPDivide,                                            // FDIV
+    BitwiseXor,                                          // EOR
+    FPFusedMultiplyAddLongToAccumulatorUpperHalf,        // FMLAL2
+    BitwiseSelect,                                       // BSL
+    FPMinimumNumberPairwise,                             // FMINNMP
+    FPAbsoluteDifference,                                // FABD
+    FPAbsoluteMinimum,                                   // FAMIN
+    FPCompareGT,                                         // FCMGT
+    FPAbsoluteCompareGT,                                 // FACGT
+    FPMinimumPairwise,                                   // FMINP
+    FPScale,                                             // FSCALE
+    BitwiseInsertIfTrue,                                 // BIT
     FPFusedMultiplySubtractLongFromAccumulatorUpperHalf, // FMLSL2
-    BitwiseInsertIfFalse, // BIF
+    BitwiseInsertIfFalse,                                // BIF
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,4 +442,20 @@ pub enum Instruction {
     },
 
     Unknown,
+}
+
+impl Instruction {
+    pub fn decode(value: u32) -> Self {
+        crate::decoding::decode(value)
+    }
+
+    pub fn decode_bytes(data: &[u8]) -> impl Iterator<Item = Self> {
+        (0..(data.len() / (INSTRUCTION_SIZE as usize)))
+            .into_iter()
+            .map(|instruction_index| {
+                let offset = instruction_index * (INSTRUCTION_SIZE as usize);
+                let bytes: &[_; 4] = &data[offset..][0..4].try_into().unwrap();
+                Instruction::decode(u32::from_le_bytes(*bytes))
+            })
+    }
 }

@@ -1,3 +1,5 @@
+pub const INSTRUCTION_SIZE: u64 = 4;
+
 pub fn bit_mask(bits: u32) -> u32 {
     (1u32 << bits) - 1
 }

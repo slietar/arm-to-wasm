@@ -5,11 +5,12 @@ mod instructions;
 mod structures;
 mod utilities;
 
-use crate::{decoding::decode, instructions::Instruction};
 use capstone::arch::BuildsCapstone as _;
 use std::{collections::HashMap, time::Instant};
 
-const INSTRUCTION_SIZE: u64 = 4;
+use crate::decoding::decode;
+use crate::instructions::Instruction;
+use crate::utilities::INSTRUCTION_SIZE;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = std::env::args()
@@ -108,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ));
 
                     if true {
-                    // if let Instruction::Unknown = instruction {
+                        // if let Instruction::Unknown = instruction {
                         print!("[{:#010x}]", address);
                         println!(" {} {}", mnemonic, capstone_instruction.op_str().unwrap(),);
 
@@ -127,7 +128,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unknown_counts.sort_by_key(|(_, (known_count, unknown_count))| *unknown_count);
 
     for (mnemonic, (known_count, unknown_count)) in &unknown_counts {
-        eprintln!("  {:<8} {} / {}", mnemonic, unknown_count, known_count + unknown_count);
+        eprintln!(
+            "  {:<8} {} / {}",
+            mnemonic,
+            unknown_count,
+            known_count + unknown_count
+        );
     }
 
     let total_unknown_count: usize = unknown_counts
@@ -142,7 +148,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!(
         "  {:<8} {} / {}",
-        "Total", total_unknown_count, total_known_count + total_unknown_count
+        "Total",
+        total_unknown_count,
+        total_known_count + total_unknown_count
     );
 
     Ok(())
