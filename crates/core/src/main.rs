@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let module = translator::GlobalContext::translate_elf(&elf_bytes)?;
 
             let ok = module.validate();
-            let optimize = false;
+            let optimize = subcommand_matches.get_flag("optimize");
 
             if ok {
                 if optimize {

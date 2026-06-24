@@ -58,6 +58,9 @@ pub struct RoutineContext {
     local_index_by_register: HashMap<Register, u32>,
     pub module: Module,
     pub return_registers: Vec<Register>,
+    pub svc_function_name: String,
+    pub svc_return_scratch_local_index: u32,
+    pub svc_return_type: Type,
 }
 
 impl RoutineContext {
@@ -312,6 +315,9 @@ impl GlobalContext {
             local_index_by_register,
             module: module.clone(),
             return_registers: param_registers.to_vec(),
+            svc_return_type: self.svc_return_type.clone(),
+            svc_function_name: self.svc_function_name.clone(),
+            svc_return_scratch_local_index: next_local_index - 1,
         };
 
         let mut routine_exprs = Vec::new();

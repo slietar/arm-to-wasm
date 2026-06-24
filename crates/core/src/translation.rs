@@ -4,7 +4,7 @@ use arm_decoder::{
 };
 use binaryen_module::{BinaryOp, Expression, UnaryOp};
 
-use crate::translator::{Flag, RoutineContext};
+use crate::translator::{Flag, RoutineContext, SVC_PARAM_REGISTERS, SVC_RETURN_REGISTERS};
 
 impl RoutineContext {
     pub fn translate_instruction(
@@ -278,6 +278,38 @@ impl RoutineContext {
                         ),
                     };
                     block_exprs.push(self.write_flag(Flag::Overflow, overflow_expr));
+                }
+            }
+
+            Instruction::SupervisorCall { argument } => {
+                let arg_exprs = std::iter::once(self.module.const_(*argument as u32))
+                    .chain(
+                        SVC_PARAM_REGISTERS
+                            .iter()
+                            .map(|reg| self.read_register(*reg, SizeVariant::Reg64)),
+                    )
+                    .collect::<Vec<_>>();
+
+                block_exprs.push(self.module.local_set(
+                    self.svc_return_scratch_local_index,
+                    self.module.call(
+                        &self.svc_function_name,
+                        &arg_exprs,
+                        self.svc_return_type.clone(),
+                    ),
+                ));
+
+                for (return_index, return_register) in SVC_RETURN_REGISTERS.iter().enumerate() {
+                    block_exprs.push(self.module.local_set(
+                        self.get_register_local_index(*return_register),
+                        self.module.tuple_extract(
+                            self.module.local_get(
+                                self.svc_return_scratch_local_index,
+                                self.svc_return_type.clone(),
+                            ),
+                            return_index as u32,
+                        ),
+                    ));
                 }
             }
 
