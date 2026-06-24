@@ -5,8 +5,8 @@
 mod analysis;
 mod constants;
 mod decoding;
-mod instruction_helper;
-mod instructions;
+// mod instruction_helper;
+// mod instructions;
 mod module;
 mod shared_library;
 // mod translation;
@@ -22,11 +22,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             clap::command!("analyze")
                 .about("Analyze an ELF file")
                 .arg(clap::arg!(<FILE> "The ELF file to analyze").required(true)),
-        )
-        .subcommand(
-            clap::command!("disassemble")
-                .about("Disassemble an ELF file")
-                .arg(clap::arg!(<FILE> "The ELF file to disassemble").required(true)),
         )
         .subcommand(
             clap::command!("translate")
@@ -48,11 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "analyze" => {
             analysis::main_analyze(&elf_bytes)?;
         }
-        "disassemble" => {
-            instructions::decode_file(&elf_bytes)?;
-        }
         "translate" => {
-            todo!()
             // let optimize = subcommand_matches.get_flag("optimize");
             // translation::translate(&elf_bytes, optimize)?;
         }

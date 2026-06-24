@@ -3,14 +3,17 @@ use std::{
     hash::Hash,
 };
 
+use arm_decoder::{
+    instructions::{
+        AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreOffset,
+        LoadStoreOp,
+    },
+    structures::{Register, SizeVariant, WritebackOffset},
+    utilities::INSTRUCTION_SIZE,
+};
 use elf::{ElfBytes, gnu_symver};
 
-use crate::{
-    constants::INSTRUCTION_SIZE,
-    instruction_helper::InstructionInfo as _,
-    instructions::{Address, AddressingMode, Instruction, Register, SizeVariant, SizedRegister},
-    shared_library,
-};
+use crate::shared_library;
 
 pub type ElfFile<'a> = ElfBytes<'a, elf::endian::AnyEndian>;
 
@@ -57,7 +60,7 @@ struct Jump {
 struct StackAccess {
     address: u64,
     offset: i32,
-    size: SizeVariant,
+    size: SizeVariant, // TODO: Update
     read: bool,
     write: bool,
 }
@@ -109,8 +112,6 @@ pub fn analyze(
         eprintln!("{}", routine_name.as_deref().unwrap());
     }
 
-    return Err("Analysis is currently disabled".into());
-
     for section in section_headers.iter() {
         let is_executable = (section.sh_flags & elf::abi::SHF_EXECINSTR as u64) != 0;
         let section_name = section_name_table.get(section.sh_name as usize);
@@ -125,10 +126,14 @@ pub fn analyze(
         let instructions = Instruction::decode_bytes(section_data);
         let section_start_address = section.sh_addr;
 
-        for (instruction_index, instruction) in instructions.iter().enumerate() {
-            if let Instruction::BranchWithLink { target } = instruction {
+        for (instruction_index, instruction) in instructions.enumerate() {
+            if let Instruction::UnconditionalBranch {
+                link: true,
+                target: BranchTarget::RelativeInstructionOffset(target_offset),
+            } = instruction
+            {
                 let target_address = ((section_start_address as i64)
-                    + ((instruction_index as i64) + (*target as i64)) * (INSTRUCTION_SIZE as i64))
+                    + ((instruction_index as i64) + target_offset) * (INSTRUCTION_SIZE as i64))
                     as u64;
 
                 routines_names.entry(target_address).or_insert_with(|| None);
@@ -146,7 +151,8 @@ pub fn analyze(
             // TODO: Move to section
             instructions: Instruction::decode_bytes(
                 &elf_bytes[(seg.p_offset as usize)..(seg.p_offset + seg.p_filesz) as usize],
-            ),
+            )
+            .collect(),
             source_offset: seg.p_offset,
             size: seg.p_filesz,
         })
@@ -231,9 +237,12 @@ pub fn analyze(
                 // eprintln!("Handling address {:#x}", current_address);
 
                 match instruction {
-                    Instruction::Branch { target } => {
+                    Instruction::UnconditionalBranch {
+                        link: false,
+                        target: BranchTarget::RelativeInstructionOffset(target_offset),
+                    } => {
                         let target_address = ((current_address as i64)
-                            + (*target as i64) * (INSTRUCTION_SIZE as i64))
+                            + target_offset * (INSTRUCTION_SIZE as i64))
                             as u64;
                         // eprintln!("Branch target address: {:#x}", target_address);
 
@@ -247,10 +256,8 @@ pub fn analyze(
                         break;
                     }
                     Instruction::BranchConditionally { target, .. }
-                    | Instruction::CompareAndBranchOnNonzero { target, .. }
-                    | Instruction::CompareAndBranchOnZero { target, .. }
-                    | Instruction::TestBitAndBranchIfNonzero { target, .. }
-                    | Instruction::TestBitAndBranchIfZero { target, .. } => {
+                    | Instruction::CompareAndBranch { target, .. }
+                    | Instruction::TestBitAndBranch { target, .. } => {
                         let target_address = ((current_address as i64)
                             + (*target as i64) * (INSTRUCTION_SIZE as i64))
                             as u64;
@@ -264,69 +271,82 @@ pub fn analyze(
                         });
                         is_prologue = false;
                     }
-                    Instruction::BranchWithLink { target } => {
+                    Instruction::UnconditionalBranch { link: true, target } => {
                         is_prologue = false;
                     }
-                    Instruction::SubImmediate {
+                    Instruction::AddSubtract {
                         destination: Register::SP,
-                        operand,
-                        source: Register::SP,
+                        op: AddSubtractOp::Add,
+                        operand1: Register::SP,
+                        operand2: AddSubtractRightOperand::Immediate(offset),
+                        set_flags: false,
                         variant: SizeVariant::Reg64,
                     } if stack_entry_size.is_none() && is_prologue => {
-                        stack_entry_size = Some(*operand);
+                        stack_entry_size = Some(*offset as u64);
                     }
-                    Instruction::StorePairOfRegisters {
-                        address:
-                            Address {
-                                base: Register::SP,
-                                mode:
-                                    AddressingMode::PostIndexWithWriteback { offset }
-                                    | AddressingMode::PreIndexWithWriteback { offset },
-                            },
+                    Instruction::LoadStoreRegister {
+                        address: Register::SP,
+                        offset: LoadStoreOffset::Immediate { offset },
+                        op,
+                        size,
+                        value,
+                    } => {
+                        if stack_entry_size.is_none()
+                            && is_prologue
+                            && let Some(offset) = offset.writeback
+                        {
+                            assert!(offset < 0);
+                            stack_entry_size = Some(-offset as u64);
+                        }
+
+                        let write = matches!(op, LoadStoreOp::Store);
+
+                        stack_accesses.push(StackAccess {
+                            address: current_address,
+                            offset: 0,
+                            size: SizeVariant::Reg64,
+                            read: !write,
+                            write,
+                        });
+
+                        is_prologue = false;
+                    }
+                    Instruction::LoadStorePairOfRegisters {
+                        address: Register::SP,
+                        offset,
+                        op,
+                        size: _,
                         value1,
                         value2,
                         variant,
-                    } if stack_entry_size.is_none() && is_prologue => {
-                        assert!(*offset <= 0);
-                        stack_entry_size = Some(-*offset as u64);
+                    } => {
+                        if stack_entry_size.is_none()
+                            && is_prologue
+                            && let Some(offset) = offset.writeback
+                        {
+                            assert!(offset < 0);
+                            stack_entry_size = Some(-offset as u64);
+                        }
+
+                        let write = matches!(op, LoadStoreOp::Store);
 
                         stack_accesses.push(StackAccess {
                             address: current_address,
-                            offset: 0,
+                            offset: offset.access,
                             size: *variant,
-                            read: false,
-                            write: true,
+                            read: !write,
+                            write,
                         });
 
                         stack_accesses.push(StackAccess {
                             address: current_address,
-                            offset: if *variant == SizeVariant::Reg64 { 8 } else { 4 },
+                            offset: offset.access + variant.byte_count() as i32,
                             size: *variant,
-                            read: false,
-                            write: true,
+                            read: !write,
+                            write,
                         });
-                    }
-                    Instruction::StoreRegisterImmediate {
-                        address:
-                            Address {
-                                base: Register::SP,
-                                mode:
-                                    AddressingMode::PostIndexWithWriteback { offset }
-                                    | AddressingMode::PreIndexWithWriteback { offset },
-                            },
-                        value,
-                        variant,
-                    } if stack_entry_size.is_none() && is_prologue => {
-                        assert!(*offset <= 0);
-                        stack_entry_size = Some(-*offset as u64);
 
-                        stack_accesses.push(StackAccess {
-                            address: current_address,
-                            offset: 0,
-                            size: *variant,
-                            read: false,
-                            write: true,
-                        });
+                        is_prologue = false;
                     }
                     Instruction::Return { target } => {
                         is_prologue = false;
@@ -334,68 +354,23 @@ pub fn analyze(
                         break;
                     }
 
-                    Instruction::LoadRegisterImmediate {
-                        address:
-                            Address {
-                                base: Register::SP,
-                                mode,
-                            },
-                        destination,
-                        variant,
-                    } => {
-                        stack_accesses.push(StackAccess {
-                            address: current_address,
-                            offset: mode.access_offset(),
-                            size: *variant,
-                            read: true,
-                            write: false,
-                        });
-                    }
-                    Instruction::StoreRegisterImmediate {
-                        address:
-                            Address {
-                                base: Register::SP,
-                                mode,
-                            },
-                        value,
-                        variant,
-                    } => {
-                        stack_accesses.push(StackAccess {
-                            address: current_address,
-                            offset: mode.access_offset(),
-                            size: *variant,
-                            read: false,
-                            write: true,
-                        });
-                    }
-                    Instruction::StorePairOfRegisters {
-                        address:
-                            Address {
-                                base: Register::SP,
-                                mode,
-                            },
-                        value1,
-                        value2,
-                        variant,
-                    } => {
-                        stack_accesses.push(StackAccess {
-                            address: current_address,
-                            offset: mode.access_offset(),
-                            size: *variant,
-                            read: false,
-                            write: true,
-                        });
-
-                        stack_accesses.push(StackAccess {
-                            address: current_address,
-                            offset: mode.access_offset()
-                                + (if *variant == SizeVariant::Reg64 { 8 } else { 4 }),
-                            size: *variant,
-                            read: false,
-                            write: true,
-                        });
-                    }
-
+                    // Instruction::StoreRegisterImmediate {
+                    //     address:
+                    //         Address {
+                    //             base: Register::SP,
+                    //             mode,
+                    //         },
+                    //     value,
+                    //     variant,
+                    // } => {
+                    //     stack_accesses.push(StackAccess {
+                    //         address: current_address,
+                    //         offset: mode.access_offset(),
+                    //         size: *variant,
+                    //         read: false,
+                    //         write: true,
+                    //     });
+                    // }
                     _ => {
                         // eprintln!("Skipping instruction: {} {}", instruction.mnemonic().unwrap(), instruction.op_str().unwrap());
                     }
@@ -536,7 +511,7 @@ pub fn analyze(
 
         // Register read analysis
 
-        let segment_instructions = Instruction::decode_bytes(&segment_data);
+        /* let segment_instructions = Instruction::decode_bytes(&segment_data).collect();
 
         type Walker = RegisterReadWalker;
         let walker = Walker::default();
@@ -581,7 +556,7 @@ pub fn analyze(
             if !inserted {
                 exit_walkers.push(walker);
             }
-        }
+        } */
 
         // eprintln!("Exit walker: {:#?}", Walker::merge_all(&exit_walkers));
 
@@ -632,16 +607,25 @@ pub fn analyze(
 
 pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let elf_file = ElfFile::minimal_parse(elf_bytes)?;
+    let analysis = analyze(elf_bytes, elf_file)?;
 
-    let shared_library_analysis = shared_library::analyze_shared_library(elf_file)?;
+    eprintln!("{:#?}", analysis);
 
-    println!("Libraries: {:#?}", shared_library_analysis.library_versions);
+    // let shared_library_analysis = shared_library::analyze_shared_library(elf_file)?;
 
-    for symbol in shared_library_analysis.symbols {
-        println!("{symbol:?}",);
-    }
+    // println!("Libraries: {:#?}", shared_library_analysis.library_versions);
+
+    // for symbol in shared_library_analysis.symbols {
+    //     println!("{symbol:?}",);
+    // }
 
     Ok(())
+}
+
+/* #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SizedRegister {
+    pub register: Register,
+    pub variant: SizeVariant,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -711,3 +695,4 @@ fn hash_set<H: std::hash::Hasher, T: Hash + Eq>(state: &mut H, set: &HashSet<T>)
     state.write_usize(set.len());
     state.write_u64(hash);
 }
+ */
