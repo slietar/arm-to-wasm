@@ -25,6 +25,7 @@ pub enum LibraryVersion {
 
 #[derive(Debug)]
 pub struct Symbol {
+    pub dynamic_symbol_index: usize,
     pub name: String,
     pub kind: SymbolKind,
 }
@@ -43,7 +44,15 @@ pub enum SymbolKind {
 }
 
 #[derive(Debug)]
+pub struct JumpRelocation {
+    addend: i64,
+    symbol_index: usize,
+    source_address: u64,
+}
+
+#[derive(Debug)]
 pub struct SharedLibraryAnalysis {
+    pub jump_relocations: Vec<JumpRelocation>,
     pub library_versions: Vec<LibraryVersion>,
     pub soname: Option<String>,
     pub symbols: Vec<Symbol>,
@@ -91,13 +100,12 @@ pub fn analyze_shared_library(
             0,
             verdef_data,
         ) {
-            let mut names = verdaux_iter
-                .map(|verdaux| {
-                    verdef_strings
-                        .get(verdaux.vda_name as usize)
-                        .unwrap()
-                        .to_string()
-                });
+            let mut names = verdaux_iter.map(|verdaux| {
+                verdef_strings
+                    .get(verdaux.vda_name as usize)
+                    .unwrap()
+                    .to_string()
+            });
 
             let first_name = names.next().unwrap();
 
@@ -163,21 +171,23 @@ pub fn analyze_shared_library(
                 Ok(dynamic_symbol_table
                     .iter()
                     .zip(versym_table.iter())
-                    .filter_map(|(symbol, version_index)| {
-                        if symbol.st_symtype() == elf::abi::STT_NOTYPE
-                            || symbol.st_symtype() == elf::abi::STT_SECTION
-                            || symbol.st_shndx == elf::abi::SHN_ABS
+                    .enumerate()
+                    .filter_map(|(dynamic_symbol_index, (dynamic_symbol, version_index))| {
+                        if
+                        /* dynamic_symbol.st_symtype() == elf::abi::STT_NOTYPE || */
+                        dynamic_symbol.st_symtype() == elf::abi::STT_SECTION
+                            || dynamic_symbol.st_shndx == elf::abi::SHN_ABS
                         {
                             return None;
                         }
 
                         let symbol_name = dynamic_symbol_string_table
-                            .get(symbol.st_name as usize)
+                            .get(dynamic_symbol.st_name as usize)
                             .unwrap_or("<unknown>")
                             .to_string();
 
-                        let address =
-                            (symbol.st_shndx != elf::abi::SHN_UNDEF).then_some(symbol.st_value);
+                        let address = (dynamic_symbol.st_shndx != elf::abi::SHN_UNDEF)
+                            .then_some(dynamic_symbol.st_value);
 
                         let raw_version_index = version_index.index();
                         let version_index = (raw_version_index != elf::abi::VER_NDX_LOCAL
@@ -192,11 +202,12 @@ pub fn analyze_shared_library(
                         } else {
                             SymbolKind::Imported {
                                 version_index,
-                                weak: symbol.st_bind() == elf::abi::STB_WEAK,
+                                weak: dynamic_symbol.st_bind() == elf::abi::STB_WEAK,
                             }
                         };
 
                         Some(Symbol {
+                            dynamic_symbol_index,
                             name: symbol_name,
                             kind,
                         })
@@ -207,7 +218,52 @@ pub fn analyze_shared_library(
         .transpose()?
         .unwrap_or_default();
 
+    let string_table = elf_file.section_headers_with_strtab()?.1.unwrap();
+
+    let plt_section = elf_file
+        .section_headers()
+        .and_then(|sections| {
+            sections.iter().find(|section| {
+                section.sh_type == elf::abi::SHT_PROGBITS
+                    && string_table.get(section.sh_name as usize).unwrap_or("") == ".plt"
+            })
+        })
+        .unwrap();
+
+    let mut jump_relocations = Vec::<JumpRelocation>::new();
+
+    if let Some(sections) = elf_file.section_headers() {
+        for section in sections.iter() {
+            if section.sh_type == elf::abi::SHT_RELA {
+                // println!("Section name: {:?}", string_table.get(section.sh_name as usize));
+                // continue;
+
+                if let Ok(relas) = elf_file.section_data_as_relas(&section) {
+                    for (rela_index, rela) in relas.enumerate() {
+                        if rela.r_type == elf::abi::R_AARCH64_JUMP_SLOT {
+                            let address = plt_section.sh_addr + (rela_index as u64 + 2) * 4;
+                            let symbol_index = symbols
+                                .iter()
+                                .position(|symbol| {
+                                    symbol.dynamic_symbol_index == rela.r_sym as usize
+                                })
+                                .unwrap();
+                            eprintln!("{:?}", symbols[symbol_index]);
+
+                            jump_relocations.push(JumpRelocation {
+                                addend: rela.r_addend,
+                                symbol_index,
+                                source_address: address,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(SharedLibraryAnalysis {
+        jump_relocations,
         library_versions,
         soname: self_soname,
         symbols,
