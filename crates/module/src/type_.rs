@@ -8,21 +8,23 @@ pub struct Type {
 }
 
 impl Module {
+    // Variants like BinaryenInt32 are deprecated
+
     pub fn i32(&self) -> Type {
         Type {
-            ptr: unsafe { by::BinaryenInt32() },
+            ptr: unsafe { by::BinaryenTypeInt32() },
         }
     }
 
     pub fn i64(&self) -> Type {
         Type {
-            ptr: unsafe { by::BinaryenInt64() },
+            ptr: unsafe { by::BinaryenTypeInt64() },
         }
     }
 
     pub fn none(&self) -> Type {
         Type {
-            ptr: unsafe { by::BinaryenNone() },
+            ptr: unsafe { by::BinaryenTypeNone() },
         }
     }
 

@@ -8,7 +8,7 @@ use crate::{
 };
 
 impl Module {
-    pub fn relooper(&mut self) -> Relooper {
+    pub fn relooper(&self) -> Relooper {
         Relooper {
             module: self.inner_rc(),
             by_relooper: unsafe { by::RelooperCreate(self.module_ptr()) },
@@ -23,7 +23,7 @@ pub struct Relooper {
 }
 
 impl Relooper {
-    pub fn add_block(&mut self, code: Expression) -> RelooperBlock {
+    pub fn add_block(&self, code: Expression) -> RelooperBlock {
         RelooperBlock {
             by_block: unsafe { by::RelooperAddBlock(self.by_relooper, code.ptr()) },
         }

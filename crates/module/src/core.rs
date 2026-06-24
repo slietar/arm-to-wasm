@@ -33,6 +33,10 @@ impl Module {
         self.inner.clone()
     }
 
+    pub unsafe fn unsafe_ptr(&self) -> by::BinaryenModuleRef {
+        self.inner.ptr
+    }
+
     pub fn new() -> Self {
         let ptr = unsafe { by::BinaryenModuleCreate() };
 
@@ -82,4 +86,23 @@ impl Module {
 
         Ok(())
     }
+}
+
+#[test]
+fn test_module() {
+    let mut module = Module::new();
+
+    assert!(module.validate());
+
+    module.optimize();
+
+    assert!(module.validate());
+
+    module.function(
+        "test",
+        &[],
+        module.none(),
+        &[],
+        module.nop(),
+    );
 }

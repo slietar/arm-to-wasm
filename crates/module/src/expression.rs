@@ -1,11 +1,12 @@
-use std::{
-    ffi::CString,
-    rc::Rc,
-};
+use std::ffi::CString;
+use std::rc::Rc;
 
 use binaryen::ffi as by;
 
-use crate::{Type, core::{Module, ModuleInner}};
+use crate::{
+    Type,
+    core::{Module, ModuleInner},
+};
 
 #[derive(Debug, Clone)]
 pub struct Expression {
@@ -15,6 +16,10 @@ pub struct Expression {
 
 impl Expression {
     pub(crate) fn ptr(&self) -> by::BinaryenExpressionRef {
+        self.ptr
+    }
+
+    pub unsafe fn unsafe_ptr(&self) -> by::BinaryenExpressionRef {
         self.ptr
     }
 }
@@ -34,12 +39,7 @@ impl Module {
         }
     }
 
-    pub fn call(
-        &self,
-        target: &str,
-        arguments: &[Expression],
-        return_type: Type,
-    ) -> Expression {
+    pub fn call(&self, target: &str, arguments: &[Expression], return_type: Type) -> Expression {
         let target_cstr = CString::new(target).unwrap();
 
         let mut argument_ptrs: Vec<_> = arguments.iter().map(Expression::ptr).collect();
@@ -75,7 +75,9 @@ impl Module {
     pub fn unary(&self, operand: Expression, op: UnaryOp) -> Expression {
         Expression {
             _module: self.inner_rc(),
-            ptr: unsafe { by::BinaryenUnary(self.module_ptr(), op.to_binaryen_op(), operand.ptr()) },
+            ptr: unsafe {
+                by::BinaryenUnary(self.module_ptr(), op.to_binaryen_op(), operand.ptr())
+            },
         }
     }
 
@@ -98,19 +100,18 @@ impl Module {
 
     pub fn function(
         &self,
-        name: &str,
+        name: impl AsRef<str>,
         params: &[Type],
         result: Type,
         locals: &[Type],
         body: Expression,
     ) -> by::BinaryenFunctionRef {
-        let name_cstr = CString::new(name).unwrap();
         let mut local_ptrs: Vec<_> = locals.iter().map(|t| t.ptr).collect();
 
         unsafe {
             by::BinaryenAddFunction(
                 self.module_ptr(),
-                name_cstr.as_ptr(),
+                CString::new(name.as_ref()).unwrap().as_ptr(),
                 self.tuple_type(params).ptr,
                 result.ptr,
                 local_ptrs.as_mut_ptr(),

@@ -1,9 +1,10 @@
 mod core;
 mod expression;
-mod type_;
 mod relooper;
+mod type_;
+mod exports;
 
 pub use core::Module;
-pub use expression::Expression;
-pub use type_::Type;
+pub use expression::{BinaryOp, Expression, UnaryOp};
 pub use relooper::{Relooper, RelooperBlock};
+pub use type_::Type;
