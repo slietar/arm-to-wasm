@@ -389,12 +389,28 @@ impl GlobalContext {
                 let condition_expr = match last_instruction {
                     Instruction::UnconditionalBranch { .. } => None,
                     Instruction::BranchConditionally { condition, .. } => Some(match condition {
-                        Condition::EQ => module.binary(
-                            context.read_flag(Flag::Zero),
-                            module.const_(0i32),
-                            BinaryOp::EqInt32,
+                        Condition::EQ => context.read_flag(Flag::Zero),
+                        Condition::NE => {
+                            module.unary(context.read_flag(Flag::Zero), UnaryOp::EqZInt32)
+                        }
+
+                        // N != V
+                        Condition::LT => module.binary(
+                            context.read_flag(Flag::Negative),
+                            context.read_flag(Flag::Overflow),
+                            BinaryOp::NeInt32,
                         ),
-                        Condition::NE => context.read_flag(Flag::Zero),
+
+                        // !Z && (N == V)
+                        Condition::GT => module.binary(
+                            module.unary(context.read_flag(Flag::Negative), UnaryOp::EqZInt32),
+                            module.binary(
+                                context.read_flag(Flag::Zero),
+                                context.read_flag(Flag::Overflow),
+                                BinaryOp::EqInt32,
+                            ),
+                            BinaryOp::AndInt32,
+                        ),
                         _ => todo!(),
                     }),
                     Instruction::CompareAndBranch {

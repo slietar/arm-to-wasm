@@ -11,7 +11,7 @@ mod translation;
 mod translator;
 
 use clap::Parser;
-use std::path::PathBuf;
+use std::{fs::File, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = clap::Command::new("awsm")
@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 module.print();
-                // module.write(&mut File::create("output.wasm")?)?;
+                module.write(&mut File::create("output.wasm")?)?;
             }
         }
         _ => unreachable!(),

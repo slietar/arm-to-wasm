@@ -16,7 +16,13 @@ impl std::error::Error for ExitError {}
 fn main() -> wasmtime::Result<()> {
     let engine = Engine::default();
 
-    let bytes = std::fs::read("../output.wasm")?;
+    let bytes = std::fs::read(
+        std::env::args()
+            .nth(1)
+            .expect("Please provide a path to a wasm file"),
+    )
+    .expect("Failed to read wasm file");
+
     let module = Module::new(&engine, bytes)?;
 
     let mut linker = Linker::new(&engine);
@@ -61,11 +67,14 @@ fn main() -> wasmtime::Result<()> {
     match result {
         Ok(()) => {
             eprintln!("-> WASM returned");
-        },
+        }
         Err(e) if e.downcast_ref::<ExitError>().is_some() => {
             let exit_error = e.downcast_ref::<ExitError>().unwrap();
-            eprintln!("-> WASM execution interrupted (exit called) with code: {}", exit_error.code);
-        },
+            eprintln!(
+                "-> WASM execution interrupted (exit called) with code: {}",
+                exit_error.code
+            );
+        }
         Err(e) => {
             return Err(e);
         }

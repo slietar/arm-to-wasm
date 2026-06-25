@@ -15,7 +15,7 @@ use crate::translator::{
 impl RoutineContext<'_> {
     pub fn translate_instruction(
         &self,
-        address: u64,
+        current_address: u64,
         instruction: &Instruction,
         block_exprs: &mut Vec<Expression>,
     ) {
@@ -289,6 +289,24 @@ impl RoutineContext<'_> {
 
                     block_exprs.push(self.write_flag(Flag::Overflow, overflow_expr));
                 }
+            }
+
+            Instruction::FormPCRelativeAddress {
+                aligned_to_page,
+                destination,
+                value,
+            } => {
+                let address = if *aligned_to_page {
+                    ((current_address & !0xfff) as i64 + *value) as u64
+                } else {
+                    ((current_address as i64) + *value) as u64
+                };
+
+                block_exprs.push(self.write_register(
+                    *destination,
+                    SizeVariant::Reg64,
+                    self.module.const_(address),
+                ));
             }
 
             Instruction::LoadStoreRegister {
@@ -586,7 +604,7 @@ impl RoutineContext<'_> {
                 target: BranchTarget::RelativeInstructionOffset(target_offset),
             } => {
                 let target_address =
-                    ((address as i64) + *target_offset * (INSTRUCTION_SIZE as i64)) as u64;
+                    ((current_address as i64) + *target_offset * (INSTRUCTION_SIZE as i64)) as u64;
 
                 let target_routine_index = self
                     .global
@@ -682,10 +700,15 @@ impl RoutineContext<'_> {
 
                 block_exprs.push(self.module.return_(self.module.tuple(&return_exprs)));
             }
+
+            Instruction::UnconditionalBranch { .. } | Instruction::BranchConditionally { .. } => {
+                // Branches are handled by the relooper
+            }
+
             _ => {
                 eprintln!(
                     "Warning: Unhandled instruction at address {:#x}: {:?}",
-                    address, instruction
+                    current_address, instruction
                 );
                 block_exprs.push(self.module.nop());
             }
