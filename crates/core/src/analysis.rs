@@ -1,7 +1,5 @@
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-};
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use arm_decoder::{
     instructions::{
@@ -13,7 +11,10 @@ use arm_decoder::{
 };
 use elf::{ElfBytes, gnu_symver};
 
-use crate::{instruction_helper::{InstructionInfo as _, SizedRegister}, shared_library};
+use crate::{
+    instruction_helper::{InstructionInfo as _, SizedRegister},
+    shared_library,
+};
 
 pub type ElfFile<'a> = ElfBytes<'a, elf::endian::AnyEndian>;
 
@@ -47,12 +48,16 @@ pub struct Block {
     pub instructions: Vec<Instruction>,
     pub jump_block_index: Option<usize>,
     pub start_address: u64,
+
+    // Implies fallthrough_block_index and jump_block_index are None
+    pub tail_call_routine_index: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
 struct Jump {
     conditional: bool,
     source_address: u64,
+    tail_call_routine_index: Option<usize>,
     target_address: u64,
 }
 
@@ -77,12 +82,12 @@ pub fn analyze(
     let section_name_table =
         section_name_table_opt.ok_or_else(|| "ELF has no section name string table".to_string())?;
 
-    let mut routines_names = HashMap::<u64, Option<String>>::new();
+    let mut routines_names_by_address = HashMap::<u64, Option<String>>::new();
 
     let entry_address = elf_file.ehdr.e_entry;
 
     if entry_address != 0 {
-        routines_names.insert(entry_address, None);
+        routines_names_by_address.insert(entry_address, None);
     }
 
     if let Some((symbol_table, symbol_string_table)) = elf_file.symbol_table()? {
@@ -95,7 +100,7 @@ pub fn analyze(
 
                 // let section_address = section.sh_addr;
 
-                routines_names.insert(
+                routines_names_by_address.insert(
                     // section_address + symbol.st_value,
                     symbol.st_value,
                     Some(
@@ -122,19 +127,23 @@ pub fn analyze(
         let instructions = Instruction::decode_bytes(section_data);
         let section_start_address = section.sh_addr;
 
-        for (instruction_index, instruction) in instructions.enumerate() {
+        /* for (instruction_index, instruction) in instructions.enumerate() {
             if let Instruction::UnconditionalBranch {
                 link: true,
                 target: BranchTarget::RelativeInstructionOffset(target_offset),
             } = instruction
             {
+                let current_address =
+                    section_start_address + (instruction_index as u64) * INSTRUCTION_SIZE;
                 let target_address = ((section_start_address as i64)
                     + ((instruction_index as i64) + target_offset) * (INSTRUCTION_SIZE as i64))
                     as u64;
 
-                routines_names.entry(target_address).or_insert_with(|| None);
+                routines_names_by_address
+                    .entry(target_address)
+                    .or_insert_with(|| None);
             }
-        }
+        } */
     }
 
     let executable_segments: Vec<_> = elf_file
@@ -156,7 +165,18 @@ pub fn analyze(
 
     let mut routines = Vec::new();
 
-    for (&routine_address, routine_name) in &routines_names {
+    let mut routine_addresses_and_names_sorted = routines_names_by_address
+        .iter()
+        .map(|(&addr, name)| (addr, (*name).as_deref()))
+        .collect::<Vec<_>>();
+
+    routine_addresses_and_names_sorted.sort_by_key(|(addr, _)| *addr);
+
+    for (routine_address, routine_name) in routine_addresses_and_names_sorted.iter().copied() {
+        // if routine_name != Some("strlen") {
+        //     continue;
+        // }
+
         let segment = executable_segments
             .iter()
             .find(|segment| {
@@ -176,18 +196,21 @@ pub fn analyze(
 
         let routine_data_offset = segment.source_offset + (routine_address - segment.address);
 
-        let next_routine_address = routines_names
+        let next_routine_address = routines_names_by_address
             .keys()
             .filter(|&&addr| addr > routine_address)
             .min()
             .copied();
 
-        let routine_max_address = next_routine_address
-            .unwrap_or(segment.address + segment.size)
+        let routine_end_address = next_routine_address
+            .unwrap_or(u64::MAX)
             .min(segment.address + segment.size);
 
+        // eprintln!("Next routine address: {:#x?}", next_routine_address);
+        // eprintln!("Segment end address: {:#x}", segment.address + segment.size);
+
         // eprintln!("Routine address: {:#x}", routine_address);
-        // eprintln!("Routine max address: {:#x}", routine_max_address);
+        // eprintln!("Routine max address: {:#x}", routine_end_address);
 
         let mut handled_addresses = HashSet::new();
         let mut queue = vec![routine_address];
@@ -199,7 +222,7 @@ pub fn analyze(
         let mut is_prologue = true;
 
         let mut stack_accesses = Vec::<StackAccess>::new();
-        let mut block_exit_addresses = HashSet::<u64>::new();
+        let mut explicit_return_addresses = HashSet::<u64>::new();
 
         while !queue.is_empty() {
             let branch_address = queue.pop().unwrap();
@@ -223,8 +246,8 @@ pub fn analyze(
                 }
 
                 // Catches branches [to a function that makes no calls or] to a function that never returns
-                if (current_address < routine_address) || (current_address >= routine_max_address) {
-                    eprintln!("Stopping at address {:#x}", current_address,);
+                if (current_address < routine_address) || (current_address >= routine_end_address) {
+                    eprintln!("Unexpected stopping at address {:#x}", current_address,);
                     break;
                 }
 
@@ -235,37 +258,51 @@ pub fn analyze(
                 match instruction {
                     Instruction::UnconditionalBranch {
                         link: false,
-                        target: BranchTarget::RelativeInstructionOffset(target_offset),
-                    } => {
-                        let target_address = ((current_address as i64)
-                            + target_offset * (INSTRUCTION_SIZE as i64))
-                            as u64;
-                        // eprintln!("Branch target address: {:#x}", target_address);
-
-                        queue.push(target_address);
-                        jumps.push(Jump {
-                            conditional: false,
-                            target_address,
-                            source_address: current_address,
-                        });
-                        is_prologue = false;
-                        break;
+                        target: BranchTarget::RelativeInstructionOffset(target),
                     }
-                    Instruction::BranchConditionally { target, .. }
+                    | Instruction::BranchConditionally { target, .. }
                     | Instruction::CompareAndBranch { target, .. }
                     | Instruction::TestBitAndBranch { target, .. } => {
-                        let target_address = ((current_address as i64)
-                            + (*target as i64) * (INSTRUCTION_SIZE as i64))
-                            as u64;
-                        // eprintln!("Cond Branch target address: {:#x}", target_address);
+                        let conditional =
+                            !matches!(instruction, Instruction::UnconditionalBranch { .. });
+                        let target_address =
+                            ((current_address as i64) + target * (INSTRUCTION_SIZE as i64)) as u64;
+                        let external_jump = target_address < routine_address
+                            || target_address >= routine_end_address;
+                        let external_called_routine_index = external_jump
+                            .then(|| {
+                                routine_addresses_and_names_sorted
+                                    .iter()
+                                    .position(|(addr, _)| *addr == target_address)
+                            })
+                            .flatten();
 
-                        queue.push(target_address);
+                        // eprintln!("Branch target address: {:#x}", target_address);
+
+                        if external_jump && external_called_routine_index.is_none() {
+                            eprintln!("Current address: {:#x}", current_address);
+                            eprintln!("Target address: {:#x}", target_address);
+                            eprintln!("Routine address: {:#x}", routine_address);
+                            eprintln!("Routine end address: {:#x}", routine_end_address);
+                            panic!();
+                        }
+
+                        if external_called_routine_index.is_none() {
+                            queue.push(target_address);
+                        }
+
                         jumps.push(Jump {
-                            conditional: true,
-                            source_address: current_address,
+                            conditional,
+                            tail_call_routine_index: external_called_routine_index,
                             target_address,
+                            source_address: current_address,
                         });
+
                         is_prologue = false;
+
+                        if !conditional {
+                            break;
+                        }
                     }
                     Instruction::UnconditionalBranch { link: true, target } => {
                         is_prologue = false;
@@ -346,27 +383,9 @@ pub fn analyze(
                     }
                     Instruction::Return { target } => {
                         is_prologue = false;
-                        block_exit_addresses.insert(current_address);
+                        explicit_return_addresses.insert(current_address);
                         break;
                     }
-
-                    // Instruction::StoreRegisterImmediate {
-                    //     address:
-                    //         Address {
-                    //             base: Register::SP,
-                    //             mode,
-                    //         },
-                    //     value,
-                    //     variant,
-                    // } => {
-                    //     stack_accesses.push(StackAccess {
-                    //         address: current_address,
-                    //         offset: mode.access_offset(),
-                    //         size: *variant,
-                    //         read: false,
-                    //         write: true,
-                    //     });
-                    // }
                     _ => {
                         // eprintln!("Skipping instruction: {} {}", instruction.mnemonic().unwrap(), instruction.op_str().unwrap());
                     }
@@ -385,6 +404,7 @@ pub fn analyze(
 
         let mut block_start_addresses = jumps
             .iter()
+            .filter(|jump| jump.tail_call_routine_index.is_none())
             .map(|jump| jump.target_address)
             .chain(std::iter::once(routine_address))
             .chain(
@@ -393,48 +413,74 @@ pub fn analyze(
                     .filter(|jump| jump.conditional)
                     .map(|jump| jump.source_address + INSTRUCTION_SIZE),
             )
-            .collect::<HashSet<_>>()
-            .into_iter()
             .collect::<Vec<_>>();
 
         block_start_addresses.sort();
-
-        // Problem: RET is not detected
+        block_start_addresses.dedup();
 
         #[derive(Debug, Clone)]
         enum BlockEndKind {
-            Exit,
-            Fallthrough,
-            Jump(Jump),
+            ExplicitReturn,
+            JumpTarget,
+            JumpSource(Jump),
+            RoutineEnd,
+            TailCall { routine_index: usize },
         }
 
-        let mut block_ends = jumps
-            .iter()
-            .flat_map(|jump| {
-                [
-                    (
-                        jump.source_address + INSTRUCTION_SIZE,
-                        BlockEndKind::Jump(jump.clone()),
-                    ),
-                    (jump.target_address, BlockEndKind::Fallthrough),
-                ]
-            })
+        let mut block_ends = std::iter::empty()
             .chain(
-                block_exit_addresses
+                jumps
                     .iter()
-                    .map(|&address| (address + INSTRUCTION_SIZE, BlockEndKind::Exit)),
+                    .filter(|jump| jump.tail_call_routine_index.is_none())
+                    .flat_map(|jump| {
+                        [
+                            // The block ends after a branch instruction
+                            (
+                                jump.source_address + INSTRUCTION_SIZE,
+                                BlockEndKind::JumpSource(jump.clone()),
+                            ),
+                            // The block ends just before a branch instruction
+                            (jump.target_address, BlockEndKind::JumpTarget),
+                        ]
+                    }),
+            )
+            .chain(
+                // The block ends after an explicit return instruction
+                explicit_return_addresses
+                    .iter()
+                    .map(|&address| (address + INSTRUCTION_SIZE, BlockEndKind::ExplicitReturn)),
+            )
+            .chain(
+                // The block ends after a tail call
+                jumps.iter().filter_map(|jump| {
+                    jump.tail_call_routine_index.map(|routine_index| {
+                        (
+                            jump.source_address,
+                            BlockEndKind::TailCall { routine_index },
+                        )
+                    })
+                }),
+            )
+            .chain(
+                // The block ends after reaching the end of the routine, which
+                // is not a problem because there likely was an earlier call
+                // that trapped
+                std::iter::once((routine_end_address, BlockEndKind::RoutineEnd)),
             )
             .collect::<Vec<_>>();
 
-        block_ends.push((routine_max_address, BlockEndKind::Exit));
+        // eprintln!("Block end addresses: {:#x?}", block_ends);
 
         block_ends.sort_by_key(|(address, jump)| {
             (
                 *address,
                 match jump {
-                    BlockEndKind::Exit => 1,
-                    BlockEndKind::Fallthrough => 2,
-                    BlockEndKind::Jump(_) => 0,
+                    // The lowest value is kept
+                    BlockEndKind::ExplicitReturn => 1,
+                    BlockEndKind::JumpTarget => 2,
+                    BlockEndKind::JumpSource(_) => 0,
+                    BlockEndKind::RoutineEnd => 3,
+                    BlockEndKind::TailCall { .. } => 4,
                 },
             )
         });
@@ -443,6 +489,8 @@ pub fn analyze(
         let blocks = block_start_addresses
             .iter()
             .map(|&addr| {
+                // eprintln!("Finding block end for start address {:#x}", addr);
+
                 let (end_addr, end_kind) = block_ends
                     .iter()
                     .find(|(end_addr, _)| *end_addr > addr)
@@ -450,8 +498,8 @@ pub fn analyze(
 
                 let fallthrough_block_index = matches!(
                     end_kind,
-                    BlockEndKind::Fallthrough
-                        | BlockEndKind::Jump(Jump {
+                    BlockEndKind::JumpTarget
+                        | BlockEndKind::JumpSource(Jump {
                             conditional: true,
                             ..
                         })
@@ -464,7 +512,7 @@ pub fn analyze(
                 });
 
                 let mut jump_block_index = match end_kind {
-                    BlockEndKind::Jump(jump) => Some(
+                    BlockEndKind::JumpSource(jump) => Some(
                         block_start_addresses
                             .iter()
                             .position(|&start_addr| start_addr == jump.target_address)
@@ -473,9 +521,17 @@ pub fn analyze(
                     _ => None,
                 };
 
+                // If a conditional jump targets the next instruction, ignore
+                // the jump and treat it as a fallthrough
                 if fallthrough_block_index == jump_block_index {
                     jump_block_index = None;
                 }
+
+                let tail_call_routine_index = if let BlockEndKind::TailCall { routine_index } = end_kind {
+                    Some(*routine_index)
+                } else {
+                    None
+                };
 
                 Block {
                     start_address: addr,
@@ -487,9 +543,16 @@ pub fn analyze(
                         .to_vec(),
                     fallthrough_block_index,
                     jump_block_index,
+                    tail_call_routine_index,
                 }
             })
             .collect::<Vec<_>>();
+
+        // eprintln!("Block start addresses: {:#x?}", block_start_addresses);
+        // eprintln!("Block end addresses: {:#x?}", block_ends);
+        // eprintln!("Jumps: {:#x?}", jumps);
+        // eprintln!("Blocks: {:#x?}", blocks);
+        // std::process::exit(0);
 
         // eprintln!("Block start addresses: {:#x?}", block_start_addresses);
         // eprintln!("Block ends: {:#x?}", block_ends);
@@ -572,7 +635,7 @@ pub fn analyze(
 
         routines.push(Routine {
             address: routine_address,
-            name: routine_name.clone(),
+            name: routine_name.map(|s| s.to_string()),
             stack_size: stack_entry_size,
             variables: variables.clone(),
             blocks: blocks.clone(),
@@ -603,7 +666,7 @@ pub fn main_analyze(elf_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> 
     let elf_file = ElfFile::minimal_parse(elf_bytes)?;
     let analysis = analyze(elf_bytes, &elf_file)?;
 
-    eprintln!("{:#?}", analysis);
+    // eprintln!("{:#?}", analysis);
 
     // let shared_library_analysis = shared_library::analyze_shared_library(elf_file)?;
 
