@@ -146,11 +146,14 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
     }
 
     // Advanced SIMD three same
+    // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Scalar-Floating-Point-and-Advanced-SIMD?lang=en#asimdsame
     if equal_masked(
         bytes.0,
         0b1000_1111_0010_0000_0000_0100_0000_0000,
         0b0000_1110_0010_0000_0000_0100_0000_0000,
     ) {
+        return Some(Instruction::Unknown);
+
         let is_scalar = bytes.bool(28);
         let u = bytes.bool(29);
         let size = bytes.immediate_unsigned(22, 2);
@@ -260,6 +263,8 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
                 _ => unreachable!(),
             }
         } else {
+            // eprintln!("Op: {:?}", op);
+
             match (size, bytes.bool(30)) {
                 (0b00, false) => Arrangement::B8,
                 (0b00, true) => Arrangement::B16,

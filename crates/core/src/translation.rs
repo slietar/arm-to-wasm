@@ -611,8 +611,16 @@ impl RoutineContext<'_> {
                     .analysis
                     .routines
                     .iter()
-                    .position(|r| r.address == target_address)
-                    .unwrap();
+                    .position(|r| r.address == target_address);
+
+                // TODO: Better handle this kind of BL
+                let target_routine_index = match target_routine_index {
+                    Some(index) => index,
+                    None => {
+                        return;
+                    }
+                };
+
                 let target_function_name = &self.global.function_names[target_routine_index];
 
                 let return_registers = DEFAULT_PARAM_REGISTERS.to_vec();
@@ -701,7 +709,9 @@ impl RoutineContext<'_> {
                 block_exprs.push(self.module.return_(self.module.tuple(&return_exprs)));
             }
 
-            Instruction::UnconditionalBranch { .. } | Instruction::BranchConditionally { .. } => {
+            Instruction::UnconditionalBranch { .. }
+            | Instruction::BranchConditionally { .. }
+            | Instruction::CompareAndBranch { .. } => {
                 // Branches are handled by the relooper
             }
 

@@ -52,6 +52,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 module.print();
                 module.write(&mut File::create("output.wasm")?)?;
             }
+
+            println!("Module is valid: {}", ok);
         }
         _ => unreachable!(),
     }

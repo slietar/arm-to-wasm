@@ -3,6 +3,7 @@ use std::{collections::HashMap, ffi::CString};
 use crate::{
     analysis::{Analysis, ElfFile, Routine},
     constants::{INSTRUCTION_SIZE, PAGE_SIZE},
+    shared_library::analyze_shared_library,
 };
 use arm_decoder::{
     instructions::Instruction,
@@ -14,12 +15,6 @@ use elf::ElfBytes;
 
 pub const GP_REGISTER_COUNT: u32 = 31;
 pub const GP_FLAG_COUNT: u32 = 4;
-
-pub const FIRST_FLAG_LOCAL_INDEX: u32 = 0;
-pub const SP_REGISTER_LOCAL_INDEX: u32 = 4;
-pub const FIRST_GP_REGISTER_LOCAL_INDEX: u32 = 5;
-pub const INTERNAL_CALL_RETURN_LOCAL_INDEX: u32 = FIRST_GP_REGISTER_LOCAL_INDEX + 5;
-pub const SVC_CALL_RETURN_LOCAL_INDEX: u32 = INTERNAL_CALL_RETURN_LOCAL_INDEX + 1;
 
 pub const DEFAULT_PARAM_REGISTERS: [Register; 9] = [
     Register::X0,
@@ -153,6 +148,10 @@ impl GlobalContext {
     pub fn translate_elf(bytes: &[u8]) -> Result<Module, Box<dyn std::error::Error>> {
         // TODO: Avoid redundancy
         let elf_file = ElfFile::minimal_parse(bytes)?;
+
+        // let shared_library_analysis = analyze_shared_library(&elf_file)?;
+        // eprintln!("Shared library analysis: {:#?}", shared_library_analysis);
+
         let analysis = crate::analysis::analyze(bytes, &elf_file)?;
 
         let module = Module::new();
@@ -202,7 +201,10 @@ impl GlobalContext {
 
         for (routine_index, routine) in context.analysis.routines.iter().enumerate() {
             let function_name = &context.function_names[routine_index];
-            context.translate_routine(routine, function_name);
+
+            if routine.name.as_deref() == Some("strlen") || true {
+                context.translate_routine(routine, function_name);
+            }
         }
 
         if let Some(entry_routine_index) = context.analysis.entry_routine_index {
@@ -374,6 +376,13 @@ impl GlobalContext {
             .zip(relooper_blocks.iter())
             .enumerate()
         {
+            eprintln!("Block {}", block_index);
+            eprintln!("  Instruction count: {}", block.instructions.len());
+            eprintln!("  Start address: {:#x}", block.start_address);
+            eprintln!("  End address: {:#x}", block.start_address + (block.instructions.len() as u64) * INSTRUCTION_SIZE);
+            eprintln!("  Fallthrough block index: {:?}", block.fallthrough_block_index);
+            eprintln!("  Jump block index: {:?}", block.jump_block_index);
+
             if let Some(fallthrough_block_index) = block.fallthrough_block_index {
                 relooper.branch(
                     relooper_block,
@@ -411,7 +420,10 @@ impl GlobalContext {
                             ),
                             BinaryOp::AndInt32,
                         ),
-                        _ => todo!(),
+                        _ => {
+                            eprintln!("Unsupported condition: {:?}", condition);
+                            module.const_(1u32)
+                        }
                     }),
                     Instruction::CompareAndBranch {
                         branch_if_zero,
@@ -431,14 +443,42 @@ impl GlobalContext {
                             (true, SizeVariant::Reg64) => BinaryOp::EqInt64,
                         },
                     )),
-                    _ => todo!(),
+                    Instruction::TestBitAndBranch {
+                        branch_if_zero,
+                        register,
+                        target,
+                        test_bit,
+                        variant,
+                    } => Some(module.binary(
+                        module.binary(
+                            context.read_register(*register, *variant),
+                            match variant {
+                                SizeVariant::Reg32 => module.const_(*test_bit),
+                                SizeVariant::Reg64 => module.const_(*test_bit as u64),
+                            },
+                            match variant {
+                                SizeVariant::Reg32 => BinaryOp::ShrUInt32,
+                                SizeVariant::Reg64 => BinaryOp::ShrUInt64,
+                            },
+                        ),
+                        match variant {
+                            SizeVariant::Reg32 => module.const_(1i32),
+                            SizeVariant::Reg64 => module.const_(1i64),
+                        },
+                        match (branch_if_zero, variant) {
+                            (false, SizeVariant::Reg32) => BinaryOp::NeInt32,
+                            (false, SizeVariant::Reg64) => BinaryOp::NeInt64,
+                            (true, SizeVariant::Reg32) => BinaryOp::EqInt32,
+                            (true, SizeVariant::Reg64) => BinaryOp::EqInt64,
+                        },
+                    )),
+                    _ => {
+                        panic!(
+                            "Unsupported last instruction in block {}: {:?}",
+                            block_index, last_instruction
+                        );
+                    }
                 };
-
-                relooper.branch(
-                    relooper_block,
-                    &relooper_blocks[jump_block_index],
-                    condition_expr,
-                );
 
                 // if condition_expr.is_some() {
                 //     eprintln!(
@@ -448,6 +488,12 @@ impl GlobalContext {
                 // } else {
                 //     eprintln!("Branch {} -> {}", block_index, jump_block_index);
                 // }
+
+                relooper.branch(
+                    relooper_block,
+                    &relooper_blocks[jump_block_index],
+                    condition_expr,
+                );
             }
         }
 
@@ -547,8 +593,8 @@ pub fn set_up_memory(
             (mapped_memory_page_count + stack_memory_page_count) as u32,
             u32::MAX,
             memory_name.as_ptr(),
-            segment_name_ptrs.as_mut_ptr() as *mut *const i8,
-            segment_datas.as_mut_ptr() as *mut *const i8,
+            segment_name_ptrs.as_mut_ptr() as *mut *const std::os::raw::c_char,
+            segment_datas.as_mut_ptr() as *mut *const std::os::raw::c_char,
             segment_passives.as_mut_ptr(),
             segment_offsets.as_mut_ptr(),
             segment_sizes.as_mut_ptr(),

@@ -66,7 +66,7 @@ pub struct SharedLibraryAnalysis {
 }
 
 pub fn analyze_shared_library(
-    elf_file: ElfFile,
+    elf_file: &ElfFile,
 ) -> Result<SharedLibraryAnalysis, Box<dyn std::error::Error>> {
     let dynamic_table = elf_file.dynamic()?.unwrap();
     let (dynamic_symbol_table, dynamic_symbol_string_table) =
