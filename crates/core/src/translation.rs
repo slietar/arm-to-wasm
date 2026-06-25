@@ -1,12 +1,12 @@
 use arm_decoder::{
     instructions::{
         AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreOffset,
-        LoadStoreOp, LogicalOp,
+        LoadStoreOp, LogicalImmediateOperand, LogicalOp,
     },
     structures::{Extension, Register, Shift, SizeVariant, SliceSize, WritebackOffset},
     utilities::INSTRUCTION_SIZE,
 };
-use binaryen_module::{BinaryOp, Expression, LoadVariant, StoreVariant, UnaryOp};
+use binaryen_module::{BinaryOp, Expression, LoadVariant, Module, StoreVariant, UnaryOp};
 
 use crate::translator::{
     DEFAULT_PARAM_REGISTERS, Flag, RoutineContext, SVC_PARAM_REGISTERS, SVC_RETURN_REGISTERS,
@@ -41,9 +41,10 @@ impl RoutineContext<'_> {
                             shift_amount,
                             shift_type,
                         } => {
-                            let reg = self.read_register(*register, *variant);
+                            let register_expr = self.read_register(*register, *variant);
+
                             if *shift_amount == 0 {
-                                reg
+                                register_expr
                             } else {
                                 let (amount_expr, shift_op) = match (shift_type, variant) {
                                     (Shift::LSL, SizeVariant::Reg32) => (
@@ -79,7 +80,8 @@ impl RoutineContext<'_> {
                                         BinaryOp::RotRInt64,
                                     ),
                                 };
-                                self.module.binary(reg, amount_expr, shift_op)
+
+                                self.module.binary(register_expr, amount_expr, shift_op)
                             }
                         }
                         AddSubtractRightOperand::ExtendedRegister {
@@ -424,17 +426,52 @@ impl RoutineContext<'_> {
                 }
             }
 
-            Instruction::LogicalImmediate {
+            Instruction::Logical {
                 destination,
                 op,
                 operand1,
                 operand2,
                 variant,
             } => {
-                let op1 = self.read_register(*operand1, *variant);
-                let op2 = match variant {
-                    SizeVariant::Reg32 => self.module.const_(*operand2 as i32),
-                    SizeVariant::Reg64 => self.module.const_(*operand2 as i64),
+                let get_op1 = || self.read_register(*operand1, *variant);
+                let get_op2 = || match operand2 {
+                    LogicalImmediateOperand::Immediate(op2) => match variant {
+                        SizeVariant::Reg32 => self.module.const_(*op2 as i32),
+                        SizeVariant::Reg64 => self.module.const_(*op2 as i64),
+                    },
+                    LogicalImmediateOperand::ShiftedRegister {
+                        inverse,
+                        register,
+                        shift_amount,
+                        shift_type,
+                    } => {
+                        let mut op2 = self.read_register(*register, *variant);
+
+                        if *shift_amount > 0 {
+                            op2 = self.module.binary(
+                                op2,
+                                variant_unsigned_const(&self.module, *variant, *shift_amount),
+                                resolve_shift_op(*shift_type, *variant),
+                            )
+                        };
+
+                        if *inverse {
+                            op2 = match variant {
+                                SizeVariant::Reg32 => self.module.binary(
+                                    op2,
+                                    self.module.const_(-1i32),
+                                    BinaryOp::XorInt32,
+                                ),
+                                SizeVariant::Reg64 => self.module.binary(
+                                    op2,
+                                    self.module.const_(-1i64),
+                                    BinaryOp::XorInt64,
+                                ),
+                            }
+                        }
+
+                        op2
+                    }
                 };
 
                 let (binary_op, set_flags) = match op {
@@ -461,32 +498,20 @@ impl RoutineContext<'_> {
                     ),
                 };
 
-                let get_arith = || {
-                    let op1 = self.read_register(*operand1, *variant);
-                    let op2 = match variant {
-                        SizeVariant::Reg32 => self.module.const_(*operand2 as i32),
-                        SizeVariant::Reg64 => self.module.const_(*operand2 as i64),
-                    };
+                let get_result = || self.module.binary(get_op1(), get_op2(), binary_op);
 
-                    self.module.binary(op1, op2, binary_op)
-                };
-
-                block_exprs.push(self.write_register(
-                    *destination,
-                    *variant,
-                    self.module.binary(op1, op2, binary_op),
-                ));
+                block_exprs.push(self.write_register(*destination, *variant, get_result()));
 
                 if set_flags {
                     // N flag: result < 0 (signed)
                     let sign_expr = match variant {
                         SizeVariant::Reg32 => self.module.binary(
-                            get_arith(),
+                            get_result(),
                             self.module.const_(0i32),
                             BinaryOp::LtSInt32,
                         ),
                         SizeVariant::Reg64 => self.module.binary(
-                            get_arith(),
+                            get_result(),
                             self.module.const_(0i64),
                             BinaryOp::LtSInt64,
                         ),
@@ -496,12 +521,12 @@ impl RoutineContext<'_> {
                     // Z flag: result == 0
                     let zero_expr = match variant {
                         SizeVariant::Reg32 => self.module.binary(
-                            get_arith(),
+                            get_result(),
                             self.module.const_(0i32),
                             BinaryOp::EqInt32,
                         ),
                         SizeVariant::Reg64 => self.module.binary(
-                            get_arith(),
+                            get_result(),
                             self.module.const_(0i64),
                             BinaryOp::EqInt64,
                         ),
@@ -665,5 +690,25 @@ impl RoutineContext<'_> {
                 block_exprs.push(self.module.nop());
             }
         }
+    }
+}
+
+fn variant_unsigned_const(module: &Module, variant: SizeVariant, value: u64) -> Expression {
+    match variant {
+        SizeVariant::Reg32 => module.const_(value as u32),
+        SizeVariant::Reg64 => module.const_(value),
+    }
+}
+
+fn resolve_shift_op(shift_type: Shift, variant: SizeVariant) -> BinaryOp {
+    match (shift_type, variant) {
+        (Shift::LSL, SizeVariant::Reg32) => BinaryOp::ShlInt32,
+        (Shift::LSL, SizeVariant::Reg64) => BinaryOp::ShlInt64,
+        (Shift::LSR, SizeVariant::Reg32) => BinaryOp::ShrUInt32,
+        (Shift::LSR, SizeVariant::Reg64) => BinaryOp::ShrUInt64,
+        (Shift::ASR, SizeVariant::Reg32) => BinaryOp::ShrSInt32,
+        (Shift::ASR, SizeVariant::Reg64) => BinaryOp::ShrSInt64,
+        (Shift::ROR, SizeVariant::Reg32) => BinaryOp::RotRInt32,
+        (Shift::ROR, SizeVariant::Reg64) => BinaryOp::RotRInt64,
     }
 }

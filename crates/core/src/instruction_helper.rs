@@ -1,6 +1,7 @@
 use arm_decoder::{
     instructions::{
         AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreOffset, LoadStoreOp,
+        LogicalImmediateOperand,
     },
     structures::{Register, SizeVariant, SliceSize},
 };
@@ -14,13 +15,6 @@ pub struct SizedRegister {
 pub trait InstructionInfo {
     fn registers_read(&self) -> Vec<SizedRegister>;
     fn registers_written(&self) -> Vec<SizedRegister>;
-}
-
-fn variant_for_slice_size(size: SliceSize) -> SizeVariant {
-    match size {
-        SliceSize::Doubleword => SizeVariant::Reg64,
-        SliceSize::Byte | SliceSize::Halfword | SliceSize::Word => SizeVariant::Reg32,
-    }
 }
 
 impl InstructionInfo for Instruction {
@@ -52,15 +46,21 @@ impl InstructionInfo for Instruction {
 
                 regs
             }
-            LogicalImmediate {
-                operand1, variant, ..
+            Logical {
+                operand1,
+                operand2: LogicalImmediateOperand::Immediate(_),
+                variant,
+                ..
             } => vec![SizedRegister {
                 register: *operand1,
                 variant: *variant,
             }],
-            LogicalShiftedRegister {
+            Logical {
                 operand1,
-                operand2,
+                operand2:
+                    LogicalImmediateOperand::ShiftedRegister {
+                        register: operand2, ..
+                    },
                 variant,
                 ..
             } => vec![
@@ -89,6 +89,8 @@ impl InstructionInfo for Instruction {
                 if let LoadStoreOffset::Register { register, .. } = offset {
                     regs.push(SizedRegister {
                         register: *register,
+
+                        // TODO: Read extension instead of using Reg64
                         variant: SizeVariant::Reg64,
                     });
                 }
@@ -96,7 +98,7 @@ impl InstructionInfo for Instruction {
                 if matches!(op, LoadStoreOp::Store) {
                     regs.push(SizedRegister {
                         register: *value,
-                        variant: variant_for_slice_size(*size),
+                        variant: size.cover_variant(),
                     });
                 }
 
@@ -215,12 +217,7 @@ impl InstructionInfo for Instruction {
                 variant,
                 ..
             }
-            | LogicalImmediate {
-                destination,
-                variant,
-                ..
-            }
-            | LogicalShiftedRegister {
+            | Logical {
                 destination,
                 variant,
                 ..
@@ -251,7 +248,7 @@ impl InstructionInfo for Instruction {
                 destination, size, ..
             } => vec![SizedRegister {
                 register: *destination,
-                variant: variant_for_slice_size(*size),
+                variant: size.cover_variant(),
             }],
             LoadStoreRegister {
                 address,
@@ -274,7 +271,7 @@ impl InstructionInfo for Instruction {
                 if !matches!(op, LoadStoreOp::Store) {
                     regs.push(SizedRegister {
                         register: *value,
-                        variant: variant_for_slice_size(*size),
+                        variant: size.cover_variant(),
                     });
                 }
 

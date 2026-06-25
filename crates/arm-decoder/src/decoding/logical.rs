@@ -1,5 +1,5 @@
 use crate::{
-    instructions::{Instruction, LogicalOp},
+    instructions::{Instruction, LogicalImmediateOperand, LogicalOp},
     structures::{InstructionBytes, Shift, SizeVariant},
     utilities::equal_masked,
 };
@@ -18,16 +18,16 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
             unreachable!();
         }
 
-        return Some(Instruction::LogicalImmediate {
+        return Some(Instruction::Logical {
             destination: bytes.register(0, true),
             op: LogicalOp::decode(bytes.immediate_unsigned(29, 2)),
             operand1: bytes.register(5, false),
-            operand2: decode_bitmask(
+            operand2: LogicalImmediateOperand::Immediate(decode_bitmask(
                 is_pattern_double,
                 bytes.immediate_unsigned(10, 6),
                 bytes.immediate_unsigned(16, 6),
                 variant,
-            ),
+            )),
             variant,
         });
     }
@@ -45,14 +45,16 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
             unreachable!();
         }
 
-        return Some(Instruction::LogicalShiftedRegister {
+        return Some(Instruction::Logical {
             destination: bytes.register(0, false),
-            inverse_operand2: bytes.bool(21),
             op: LogicalOp::decode(bytes.immediate_unsigned(29, 2)),
             operand1: bytes.register(5, false),
-            operand2: bytes.register(16, false),
-            shift_type: Shift::decode(bytes.immediate_unsigned(22, 2), true),
-            shift_amount: shift_amount,
+            operand2: LogicalImmediateOperand::ShiftedRegister {
+                inverse: bytes.bool(21),
+                register: bytes.register(16, false),
+                shift_amount: shift_amount,
+                shift_type: Shift::decode(bytes.immediate_unsigned(22, 2), true),
+            },
             variant,
         });
     }

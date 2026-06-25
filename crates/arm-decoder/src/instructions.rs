@@ -56,6 +56,17 @@ pub enum AddSubtractRightOperand {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogicalImmediateOperand {
+    Immediate(u64),
+    ShiftedRegister {
+        inverse: bool,
+        register: Register,
+        shift_amount: u64,
+        shift_type: Shift,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadStoreOp {
     LoadZeroExtend,
@@ -269,25 +280,13 @@ pub enum Instruction {
         variant: SizeVariant,
     },
 
-    // AND, ANDS, EOR, ORR
-    LogicalImmediate {
-        destination: Register,
-        op: LogicalOp,
-        operand1: Register,
-        operand2: u64,
-        variant: SizeVariant,
-    },
-
     // AND, ANDS, BIC, BICS, ORR, ORN, EOR, EON
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Data-Processing----Register#log_shift
-    LogicalShiftedRegister {
+    Logical {
         destination: Register,
-        inverse_operand2: bool,
         op: LogicalOp,
         operand1: Register,
-        operand2: Register,
-        shift_amount: u64,
-        shift_type: Shift,
+        operand2: LogicalImmediateOperand,
         variant: SizeVariant,
     },
 
