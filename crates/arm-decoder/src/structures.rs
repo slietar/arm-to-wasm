@@ -247,12 +247,6 @@ pub struct Extension {
     pub signed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Transform {
-    Extension(Extension),
-    LeftShift,
-}
-
 impl Extension {
     pub const UXTB: Extension = Extension {
         size: SliceSize::Byte,
@@ -352,6 +346,13 @@ impl Condition {
 pub enum FPSize {
     Byte,
     Half,
+    Single,
+    Double,
+    Quad,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LargeFPSize {
     Single,
     Double,
     Quad,

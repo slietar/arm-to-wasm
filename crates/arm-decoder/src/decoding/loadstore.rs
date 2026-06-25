@@ -1,6 +1,8 @@
 use crate::{
-    instructions::{Instruction, LoadStoreOffset, LoadStoreOp},
-    structures::{Extension, InstructionBytes, SizeVariant, SliceSize, Transform, WritebackOffset},
+    instructions::{GeneralSizeUsage, Instruction, LoadLiteralMode, LoadStoreOffset, LoadStoreOp},
+    structures::{
+        Extension, InstructionBytes, LargeFPSize, SizeVariant, SliceSize, WritebackOffset,
+    },
     utilities::equal_masked,
 };
 
@@ -83,7 +85,8 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         bytes.0,
         0b0011_1111_0010_0000_0000_0000_0000_0000,
         0b0011_1000_0000_0000_0000_0000_0000_0000,
-    ) || is_unsigned_immediate {
+    ) || is_unsigned_immediate
+    {
         let size = get_size();
         let offset = if is_unsigned_immediate {
             (bytes.immediate_unsigned(10, 12) << size.log_byte_count()) as i32
@@ -133,19 +136,24 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         0b0011_1111_0000_0000_0000_0000_0000_0000,
         0b0001_1000_0000_0000_0000_0000_0000_0000,
     ) {
-        let (size, sign_extend) = match bytes.immediate_unsigned(30, 2) {
-            0b00 => (SliceSize::Word, false),
-            0b01 => (SliceSize::Doubleword, false), // Sign extension has no effect on 64-bit loads
-            0b10 => (SliceSize::Word, true),
-            0b11 => return Some(Instruction::PrefetchMemory),
+        let mode = match (bytes.immediate_unsigned(30, 2), bytes.bool(26)) {
+            (0b00, false) => LoadLiteralMode::GeneralPurpose(GeneralSizeUsage::Single),
+            (0b01, false) => LoadLiteralMode::GeneralPurpose(GeneralSizeUsage::Double),
+            (0b10, false) => {
+                LoadLiteralMode::GeneralPurpose(GeneralSizeUsage::SignedExtendedSingleAsDouble)
+            }
+            (0b11, false) => return Some(Instruction::PrefetchMemory),
+            (0b00, true) => LoadLiteralMode::FP(LargeFPSize::Single),
+            (0b01, true) => LoadLiteralMode::FP(LargeFPSize::Double),
+            (0b10, true) => LoadLiteralMode::FP(LargeFPSize::Quad),
+            (0b11, true) => return None,
             _ => unreachable!(),
         };
 
         return Some(Instruction::LoadLiteral {
             destination: bytes.register(0, false),
             relative_instruction_offset: bytes.immediate(5, 19, true) as i64,
-            sign_extend,
-            size,
+            mode,
         });
     }
 

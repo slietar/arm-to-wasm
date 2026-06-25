@@ -1,7 +1,7 @@
 use crate::{
     structures::{
-        Arrangement, Condition, Extension, FPSize, Register, Shift, SizeVariant, SliceSize,
-        WritebackOffset,
+        Arrangement, Condition, Extension, FPSize, LargeFPSize, Register, Shift, SizeVariant,
+        SliceSize, WritebackOffset,
     },
     utilities::INSTRUCTION_SIZE,
 };
@@ -84,6 +84,19 @@ pub enum LoadStoreOffset {
         register: Register,
         shift_amount: u64,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneralSizeUsage {
+    Single,
+    SignedExtendedSingleAsDouble,
+    Double,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadLiteralMode {
+    GeneralPurpose(GeneralSizeUsage),
+    FP(LargeFPSize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,9 +319,8 @@ pub enum Instruction {
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Loads-and-Stores?lang=en#loadlit
     LoadLiteral {
         destination: Register,
+        mode: LoadLiteralMode,
         relative_instruction_offset: i64,
-        sign_extend: bool,
-        size: SliceSize,
     },
 
     // STP, LDP, LDPSW

@@ -1,6 +1,6 @@
 use crate::{
     instructions::{Instruction, LoadStoreOffset, LoadStoreOp},
-    structures::{Extension, InstructionBytes, SizeVariant, SliceSize, Transform, WritebackOffset},
+    structures::{Extension, InstructionBytes, SizeVariant, SliceSize, WritebackOffset},
     utilities::{equal_masked, sign_extend},
 };
 
