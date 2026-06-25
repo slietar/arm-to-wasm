@@ -10,6 +10,7 @@ mod shared_library;
 mod translation;
 mod translator;
 
+use binaryen_module::Module;
 use clap::Parser;
 use std::{fs::File, path::PathBuf};
 
@@ -49,7 +50,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     module.optimize();
                 }
 
-                module.print();
                 module.write(&mut File::create("output.wasm")?)?;
             }
 

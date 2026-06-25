@@ -274,7 +274,7 @@ impl GlobalContext {
 
         let return_type = module.tuple_type(&param_types);
 
-        let mut next_local_index = 0;
+        let mut next_local_index = param_count;
 
         let mut local_index_by_register = param_registers
             .iter()
@@ -287,6 +287,10 @@ impl GlobalContext {
             .collect::<HashMap<_, _>>();
 
         let mut local_types = Vec::new();
+
+        let relooper_helper_local_index = next_local_index;
+        local_types.push(module.i32());
+        next_local_index += 1;
 
         for reg_index in 0..GP_REGISTER_COUNT {
             let reg = Register::decode(reg_index, false, true);
@@ -337,32 +341,29 @@ impl GlobalContext {
 
         let mut routine_exprs = Vec::new();
 
-        for (param_index, param_register) in param_registers.iter().enumerate() {
-            // routine_exprs.push(module.local_set(
-            //     param_count + get_reg_local_index(*param_register),
-            //     module.local_get(param_index as u32, module.i64()),
-            // ));
-            // TODO
-        }
-
         let mut relooper_blocks = Vec::new();
 
         for (block_index, block) in routine.blocks.iter().enumerate() {
-            let mut block_exprs = Vec::new();
+            let by_block = if true {
+                let mut block_exprs = Vec::new();
 
-            for (instruction_index, instruction) in block.instructions.iter().enumerate() {
-                let current_address =
-                    block.start_address + (instruction_index as u64) * INSTRUCTION_SIZE;
+                for (instruction_index, instruction) in block.instructions.iter().enumerate() {
+                    let current_address =
+                        block.start_address + (instruction_index as u64) * INSTRUCTION_SIZE;
 
-                context.translate_instruction(current_address, instruction, &mut block_exprs);
-            }
+                    context.translate_instruction(current_address, instruction, &mut block_exprs);
+                }
 
-            if block.fallthrough_block_index.is_none() && block.jump_block_index.is_none() {
-                block_exprs.push(module.unreachable());
-                // eprintln!("Unreachable block at index {}", block_index);
-            }
+                if block.fallthrough_block_index.is_none() && block.jump_block_index.is_none() {
+                    block_exprs.push(module.unreachable());
+                    eprintln!("Unreachable block at index {}", block_index);
+                }
 
-            let by_block = module.block(module.none(), &block_exprs);
+                module.block(module.none(), &block_exprs)
+            } else {
+                module.unreachable()
+            };
+
             let relooper_block = relooper.add_block(by_block);
 
             relooper_blocks.push(relooper_block);
@@ -376,12 +377,12 @@ impl GlobalContext {
             .zip(relooper_blocks.iter())
             .enumerate()
         {
-            eprintln!("Block {}", block_index);
-            eprintln!("  Instruction count: {}", block.instructions.len());
-            eprintln!("  Start address: {:#x}", block.start_address);
-            eprintln!("  End address: {:#x}", block.start_address + (block.instructions.len() as u64) * INSTRUCTION_SIZE);
-            eprintln!("  Fallthrough block index: {:?}", block.fallthrough_block_index);
-            eprintln!("  Jump block index: {:?}", block.jump_block_index);
+            // eprintln!("Block {}", block_index);
+            // eprintln!("  Instruction count: {}", block.instructions.len());
+            // eprintln!("  Start address: {:#x}", block.start_address);
+            // eprintln!("  End address: {:#x}", block.start_address + (block.instructions.len() as u64) * INSTRUCTION_SIZE);
+            // eprintln!("  Fallthrough block index: {:?}", block.fallthrough_block_index);
+            // eprintln!("  Jump block index: {:?}", block.jump_block_index);
 
             if let Some(fallthrough_block_index) = block.fallthrough_block_index {
                 relooper.branch(
@@ -480,6 +481,8 @@ impl GlobalContext {
                     }
                 };
 
+                assert!(condition_expr.is_none() || block.fallthrough_block_index.is_some());
+
                 // if condition_expr.is_some() {
                 //     eprintln!(
                 //         "Branch {} -> {} with condition",
@@ -489,6 +492,8 @@ impl GlobalContext {
                 //     eprintln!("Branch {} -> {}", block_index, jump_block_index);
                 // }
 
+                let condition_expr = condition_expr.map(|_| module.const_(1u32));
+
                 relooper.branch(
                     relooper_block,
                     &relooper_blocks[jump_block_index],
@@ -497,7 +502,7 @@ impl GlobalContext {
             }
         }
 
-        routine_exprs.push(relooper.finish(&relooper_blocks[0]));
+        routine_exprs.push(relooper.finish(&relooper_blocks[0], relooper_helper_local_index));
 
         let func_block = module.block(module.none(), &routine_exprs);
         let func = module.function(
@@ -507,6 +512,8 @@ impl GlobalContext {
             &local_types,
             func_block,
         );
+
+        // self.module.export_function(function_name, function_name);
     }
 }
 

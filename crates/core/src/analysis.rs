@@ -173,7 +173,7 @@ pub fn analyze(
     routine_addresses_and_names_sorted.sort_by_key(|(addr, _)| *addr);
 
     for (routine_address, routine_name) in routine_addresses_and_names_sorted.iter().copied() {
-        // if routine_name != Some("strlen") {
+        // if routine_name != Some("_ZN3std4path4Path13_strip_prefix17h5db8db7f77d53e0cE") {
         //     continue;
         // }
 
@@ -527,11 +527,12 @@ pub fn analyze(
                     jump_block_index = None;
                 }
 
-                let tail_call_routine_index = if let BlockEndKind::TailCall { routine_index } = end_kind {
-                    Some(*routine_index)
-                } else {
-                    None
-                };
+                let tail_call_routine_index =
+                    if let BlockEndKind::TailCall { routine_index } = end_kind {
+                        Some(*routine_index)
+                    } else {
+                        None
+                    };
 
                 Block {
                     start_address: addr,
@@ -547,6 +548,43 @@ pub fn analyze(
                 }
             })
             .collect::<Vec<_>>();
+
+        // Block entrance check
+
+        let mut blocks_entered = vec![false; blocks.len()];
+        blocks_entered[0] = true;
+
+        for block in blocks.iter() {
+            if let Some(fallthrough_block_index) = block.fallthrough_block_index {
+                blocks_entered[fallthrough_block_index] = true;
+            }
+
+            if let Some(jump_block_index) = block.jump_block_index {
+                blocks_entered[jump_block_index] = true;
+            }
+        }
+
+        if !blocks_entered.iter().all(|&entered| entered) {
+            panic!("Not all blocks are entered: {:#?}", blocks_entered);
+        }
+
+        // for (block_index, block) in blocks.iter().enumerate() {
+        //     eprintln!("Block {block_index}");
+        //     eprintln!("    Start address: {:#x}", block.start_address);
+        //     eprintln!(
+        //         "    End address: {:#x}",
+        //         block.start_address + block.instruction_count * INSTRUCTION_SIZE
+        //     );
+        //     eprintln!(
+        //         "    Fallthrough block index: {:?}",
+        //         block.fallthrough_block_index
+        //     );
+        //     eprintln!("    Jump block index: {:?}", block.jump_block_index);
+        //     eprintln!(
+        //         "    Tail call routine index: {:?}",
+        //         block.tail_call_routine_index
+        //     );
+        // }
 
         // eprintln!("Block start addresses: {:#x?}", block_start_addresses);
         // eprintln!("Block end addresses: {:#x?}", block_ends);

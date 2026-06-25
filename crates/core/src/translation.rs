@@ -617,6 +617,7 @@ impl RoutineContext<'_> {
                 let target_routine_index = match target_routine_index {
                     Some(index) => index,
                     None => {
+                        block_exprs.push(self.module.unreachable());
                         return;
                     }
                 };
