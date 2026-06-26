@@ -56,10 +56,10 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
                 (0b00, 0b01) => LoadStoreOp::Load(BivalentObject::FloatingPoint(AnySize::Byte)),
                 (0b00, 0b10) => LoadStoreOp::Store(BivalentObject::FloatingPoint(AnySize::Quad)),
                 (0b00, 0b11) => LoadStoreOp::Load(BivalentObject::FloatingPoint(AnySize::Quad)),
-                (0b01, 0b00) => LoadStoreOp::Store(BivalentObject::FloatingPoint(AnySize::Half)),
-                (0b01, 0b01) => LoadStoreOp::Load(BivalentObject::FloatingPoint(AnySize::Half)),
-                (0b01, 0b10) => LoadStoreOp::Store(BivalentObject::FloatingPoint(AnySize::Single)),
-                (0b01, 0b11) => LoadStoreOp::Load(BivalentObject::FloatingPoint(AnySize::Single)),
+                (0b10, 0b00) => LoadStoreOp::Store(BivalentObject::FloatingPoint(AnySize::Half)),
+                (0b10, 0b01) => LoadStoreOp::Load(BivalentObject::FloatingPoint(AnySize::Half)),
+                (0b11, 0b00) => LoadStoreOp::Store(BivalentObject::FloatingPoint(AnySize::Single)),
+                (0b11, 0b01) => LoadStoreOp::Load(BivalentObject::FloatingPoint(AnySize::Single)),
                 _ => return None,
             }
         } else {
