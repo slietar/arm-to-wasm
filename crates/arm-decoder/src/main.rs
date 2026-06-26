@@ -52,11 +52,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let instruction_value =
                             u32::from_le_bytes(instruction_bytes.try_into().unwrap());
 
-                        // let disassembled = disassembler.disasm_all(instruction_bytes, 0x1000).unwrap();
-                        // let capstone_instruction = disassembled.iter().next().unwrap();
-                        // let mnemonic = capstone_instruction.mnemonic().unwrap();
-                        // println!("{}: {}", mnemonic, capstone_instruction.op_str().unwrap());
-
                         decode(instruction_value)
                     })
                     // .take(5)
@@ -113,8 +108,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if is_unknown { 1 } else { 0 },
                         ));
 
-                    if true {
-                        // if let Instruction::Unknown = instruction {
+                    // if true {
+                    if let Instruction::Unknown = instruction {
                         print!("[{:#010x}]", address);
                         println!(" {} {}", mnemonic, capstone_instruction.op_str().unwrap(),);
 

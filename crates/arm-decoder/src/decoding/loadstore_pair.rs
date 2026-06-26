@@ -1,5 +1,5 @@
 use crate::{
-    instructions::{Instruction, LoadStoreOffset, LoadStoreOp},
+    instructions::{Instruction, LoadStoreIndex, LoadStoreOp},
     structures::{Extension, InstructionBytes, SizeVariant, SliceSize, WritebackOffset},
     utilities::{equal_masked, sign_extend},
 };
@@ -32,8 +32,8 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         let offset = bytes.immediate(15, 7, true) * (size.byte_count() as i32);
 
         return Some(Instruction::LoadStorePairOfRegisters {
-            address: bytes.register(5, true),
-            offset: match bytes.immediate_unsigned(23, 2) {
+            address_base: bytes.register(5, true),
+            address_index: match bytes.immediate_unsigned(23, 2) {
                 0b00 => unimplemented!(),
 
                 // Signed offset

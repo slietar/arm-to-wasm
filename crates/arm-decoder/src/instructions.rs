@@ -1,10 +1,16 @@
 use crate::{
     structures::{
-        Arrangement, Condition, Extension, FPSize, LargeFPSize, Register, Shift, SizeVariant,
+        AnySize, Arrangement, Condition, Extension, LargeSize, Register, Shift, SizeVariant,
         SliceSize, WritebackOffset,
     },
     utilities::INSTRUCTION_SIZE,
 };
+
+// Any: Byte, Half, Single, Double, Quad
+// General: Byte, Half, Single, Double
+// Register: Single, Double
+// Large: Single, Double, Quad
+// Small: Byte, Half
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogicalOp {
@@ -67,37 +73,124 @@ pub enum LogicalImmediateOperand {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoadStoreOp {
-    LoadZeroExtend,
-    LoadSignExtend { variant: SizeVariant },
-    Store,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BivalentObject<GP, FP> {
+    GeneralPurpose(GP),
+    FloatingPoint(FP),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LoadStoreOffset {
+pub enum LoadStoreOp {
+    Load(BivalentObject<GPLoadMode, AnySize>),
+    Store(BivalentObject<SliceSize, AnySize>),
+}
+
+impl LoadStoreOp {
+    pub fn access_size(&self) -> AnySize {
+        match self {
+            LoadStoreOp::Load(BivalentObject::GeneralPurpose(mode)) => mode.access_size().into(),
+            LoadStoreOp::Load(BivalentObject::FloatingPoint(size)) => *size,
+            LoadStoreOp::Store(BivalentObject::GeneralPurpose(size)) => (*size).into(),
+            LoadStoreOp::Store(BivalentObject::FloatingPoint(size)) => *size,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadStoreIndex {
     Immediate {
         offset: WritebackOffset,
     },
     Register {
-        extension: Extension,
+        mode: IndexMode,
         register: Register,
         shift_amount: u64,
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GeneralSizeUsage {
-    Single,
-    SignedExtendedSingleAsDouble,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexMode {
+    UnsignedSingle,
+    SignedSingle,
     Double,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoadLiteralMode {
-    GeneralPurpose(GeneralSizeUsage),
-    FP(LargeFPSize),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GPLoadMode {
+    UnsignedByte,
+    SignedByteToSingle,
+    SignedByteToDouble,
+
+    UnsignedHalf,
+    SignedHalfToSingle,
+    SignedHalfToDouble,
+
+    UnsignedSingle,
+    SignedSingleToDouble,
+
+    Double,
 }
+
+impl GPLoadMode {
+    fn access_size(&self) -> SliceSize {
+        match self {
+            GPLoadMode::UnsignedByte
+            | GPLoadMode::SignedByteToSingle
+            | GPLoadMode::SignedByteToDouble => SliceSize::Byte,
+            GPLoadMode::UnsignedHalf
+            | GPLoadMode::SignedHalfToSingle
+            | GPLoadMode::SignedHalfToDouble => SliceSize::Halfword,
+            GPLoadMode::UnsignedSingle | GPLoadMode::SignedSingleToDouble => SliceSize::Word,
+            GPLoadMode::Double => SliceSize::Doubleword,
+        }
+    }
+
+    fn register_size(&self) -> SizeVariant {
+        use GPLoadMode::*;
+
+        match self {
+            UnsignedByte => SizeVariant::Reg32,
+            SignedByteToSingle => SizeVariant::Reg32,
+            SignedByteToDouble => SizeVariant::Reg64,
+
+            UnsignedHalf => SizeVariant::Reg32,
+            SignedHalfToSingle => SizeVariant::Reg32,
+            SignedHalfToDouble => SizeVariant::Reg64,
+
+            UnsignedSingle => SizeVariant::Reg32,
+            SignedSingleToDouble => SizeVariant::Reg64,
+
+            Double => SizeVariant::Reg64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadLiteralGPMode {
+    UnsignedSingle,
+    SignedSingleToDouble,
+    Double,
+}
+
+// #[derive(Debug, Clone, PartialEq, Eq)]
+// pub struct SmallSizeUsageTarget {
+//     pub sign_extend: bool,
+//     pub size: SizeVariant,
+// }
+
+// #[derive(Debug, Clone, PartialEq, Eq)]
+// pub enum SingleSizeUsageTarget {
+//     Single,
+//     Double { sign_extend: bool },
+// }
+
+// #[derive(Debug, Clone, PartialEq, Eq)]
+// pub enum GeneralSizeUsage {
+//     Byte { sign_extend: bool },
+//     Half { sign_extend: bool },
+//     Single { sign_extend_size: Option<SizeVariant> },
+//     Double,
+// }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConditionalSelectMode {
@@ -308,10 +401,9 @@ pub enum Instruction {
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Loads-and-Stores?lang=en#ldst_regoff
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Loads-and-Stores?lang=en#ldst_pos
     LoadStoreRegister {
-        address: Register,
-        offset: LoadStoreOffset,
+        address_base: Register,
+        address_index: LoadStoreIndex,
         op: LoadStoreOp,
-        size: SliceSize,
         value: Register,
     },
 
@@ -319,14 +411,14 @@ pub enum Instruction {
     // https://developer.arm.com/documentation/ddi0602/2026-03/Index-by-Encoding/Loads-and-Stores?lang=en#loadlit
     LoadLiteral {
         destination: Register,
-        mode: LoadLiteralMode,
+        op: BivalentObject<LoadLiteralGPMode, LargeSize>,
         relative_instruction_offset: i64,
     },
 
     // STP, LDP, LDPSW
     LoadStorePairOfRegisters {
-        address: Register,
-        offset: WritebackOffset,
+        address_base: Register,
+        address_index: WritebackOffset,
         op: LoadStoreOp,
         size: SizeVariant,
         value1: Register,
@@ -417,7 +509,7 @@ pub enum Instruction {
     // Allowed conversions are (W, X) <-> (S, D, H)
     ConvertFPInteger {
         destination: Register,
-        fp_size: FPSize,
+        fp_size: AnySize,
         integer_size: SizeVariant,
         op: ConvertFPIntegerOp,
         operand: Register,
@@ -441,7 +533,7 @@ pub enum Instruction {
         op: FPProcessingOp,
         operand1: Register,
         operand2: Register,
-        size: FPSize,
+        size: AnySize,
     },
 
     SIMDTriple {

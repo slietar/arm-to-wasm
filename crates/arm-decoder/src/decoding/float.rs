@@ -2,7 +2,7 @@ use crate::{
     instructions::{
         BitfieldMoveMode, ConvertFPIntegerOp, FPMoveDirection, FPMoveFPSize, FPProcessingOp, FPToIntegerRoundingMode, Instruction, LogicalOp, SIMDTripleOp
     },
-    structures::{Arrangement, FPSize, InstructionBytes, Shift, SizeVariant},
+    structures::{Arrangement, AnySize, InstructionBytes, Shift, SizeVariant},
     utilities::equal_masked,
 };
 
@@ -95,9 +95,9 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
             op,
             signed,
             fp_size: match bytes.immediate_unsigned(22, 2) {
-                0b00 => FPSize::Single,
-                0b01 => FPSize::Double,
-                0b11 => FPSize::Half,
+                0b00 => AnySize::Single,
+                0b01 => AnySize::Double,
+                0b11 => AnySize::Half,
                 _ => panic!(),
             },
             integer_size: bytes.variant(),
@@ -117,9 +117,9 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
         0b0001_1110_0010_0000_0000_1000_0000_0000,
     ) {
         let size = match bytes.immediate_unsigned(22, 2) {
-            0b00 => FPSize::Single,
-            0b01 => FPSize::Double,
-            0b11 => FPSize::Half,
+            0b00 => AnySize::Single,
+            0b01 => AnySize::Double,
+            0b11 => AnySize::Half,
             _ => panic!(),
         };
 

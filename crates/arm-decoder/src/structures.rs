@@ -1,3 +1,5 @@
+use capstone::arch::BuildsCapstone as _;
+
 use crate::utilities::{decode_bool, get_bits, sign_extend};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,15 +96,8 @@ pub enum SizeVariant {
     Reg64,
 }
 
-impl SizeVariant {
-    pub fn byte_count(&self) -> u64 {
-        match self {
-            SizeVariant::Reg32 => 4,
-            SizeVariant::Reg64 => 8,
-        }
-    }
-
-    pub fn log_byte_count(&self) -> u64 {
+impl Sized for SizeVariant {
+    fn log_byte_count(&self) -> u64 {
         match self {
             SizeVariant::Reg32 => 2,
             SizeVariant::Reg64 => 3,
@@ -114,6 +109,13 @@ impl SizeVariant {
 pub struct WritebackOffset {
     pub access: i32,
     pub writeback: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RegisterMode {
+    GP,
+    SP,
+    SIMD,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -138,8 +140,31 @@ impl InstructionBytes {
         get_bits(self.0, start, size)
     }
 
+    pub fn mnemonic(&self) -> String {
+        let disassembler = capstone::Capstone::new()
+            .arm64()
+            .mode(capstone::arch::arm64::ArchMode::Arm)
+            .detail(true)
+            .build()
+            .unwrap();
+
+        let disassembled = disassembler.disasm_all(&self.0.to_le_bytes(), 0x0).unwrap();
+        let capstone_instruction = disassembled.iter().next().unwrap();
+        let mnemonic = capstone_instruction.mnemonic().unwrap();
+
+        format!("{}: {}", mnemonic, capstone_instruction.op_str().unwrap())
+    }
+
     pub fn register(&self, start: u32, sp_mode: bool) -> Register {
         Register::decode(get_bits(self.0, start, 5), false, sp_mode)
+    }
+
+    pub fn register_any(&self, start: u32, mode: RegisterMode) -> Register {
+        Register::decode(
+            get_bits(self.0, start, 5),
+            matches!(mode, RegisterMode::SP),
+            matches!(mode, RegisterMode::SIMD),
+        )
     }
 
     pub fn register_simd(&self, start: u32) -> Register {
@@ -237,6 +262,17 @@ impl From<SizeVariant> for SliceSize {
         match value {
             SizeVariant::Reg32 => SliceSize::Word,
             SizeVariant::Reg64 => SliceSize::Doubleword,
+        }
+    }
+}
+
+impl From<SliceSize> for AnySize {
+    fn from(value: SliceSize) -> Self {
+        match value {
+            SliceSize::Byte => AnySize::Byte,
+            SliceSize::Halfword => AnySize::Half,
+            SliceSize::Word => AnySize::Single,
+            SliceSize::Doubleword => AnySize::Double,
         }
     }
 }
@@ -343,7 +379,7 @@ impl Condition {
 
 // https://developer.arm.com/documentation/102374/0103/Registers-in-AArch64---general-purpose-registers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FPSize {
+pub enum AnySize {
     Byte,
     Half,
     Single,
@@ -351,11 +387,33 @@ pub enum FPSize {
     Quad,
 }
 
+impl Sized for AnySize {
+    fn log_byte_count(&self) -> u64 {
+        match self {
+            AnySize::Byte => 0,
+            AnySize::Half => 1,
+            AnySize::Single => 2,
+            AnySize::Double => 3,
+            AnySize::Quad => 4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LargeFPSize {
+pub enum LargeSize {
     Single,
     Double,
     Quad,
+}
+
+impl Sized for LargeSize {
+    fn log_byte_count(&self) -> u64 {
+        match self {
+            LargeSize::Single => 2,
+            LargeSize::Double => 3,
+            LargeSize::Quad => 4,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,4 +430,14 @@ pub enum Arrangement {
     S2,
     S4,
     D2,
+}
+
+pub trait Sized {
+    fn log_byte_count(&self) -> u64;
+}
+
+impl dyn Sized {
+    fn byte_count(&self) -> u64 {
+        1 << self.log_byte_count()
+    }
 }
