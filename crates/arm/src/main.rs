@@ -2,16 +2,13 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
-mod analysis;
-mod constants;
+mod arch;
 mod instruction_helper;
-mod shared_library;
+mod registers;
 mod translation;
-mod translator;
 
-use bnyr::Module;
 use clap::Parser;
-use std::{fs::File, path::PathBuf};
+use std::fs::File;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = clap::Command::new("awsm")
@@ -36,10 +33,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match subcommand {
         "analyze" => {
-            analysis::main_analyze(&elf_bytes)?;
+            aw_core::analysis::main_analyze(&elf_bytes, &arch::Arm)?;
         }
         "translate" => {
-            let module = translator::GlobalContext::translate_elf(&elf_bytes)?;
+            let module = aw_core::translator::GlobalContext::translate_elf(
+                &elf_bytes,
+                Box::new(arch::Arm),
+            )?;
 
             let ok = module.validate();
             let optimize = subcommand_matches.get_flag("optimize");

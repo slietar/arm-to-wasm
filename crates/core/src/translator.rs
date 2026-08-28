@@ -2,141 +2,80 @@ use std::{collections::HashMap, ffi::CString};
 
 use crate::{
     analysis::{Analysis, ElfFile, Routine},
-    constants::{INSTRUCTION_SIZE, PAGE_SIZE},
-    shared_library::analyze_shared_library,
+    architecture::{Architecture, Width},
+    constants::PAGE_SIZE,
 };
-use arm_decoder::{
-    instructions::Instruction,
-    structures::{Condition, Register, SizeVariant},
-};
-use bnyr::{BinaryOp, Expression, MemorySegmentDescriptor, Module, Type, UnaryOp};
+use bnyr::{Expression, MemorySegmentDescriptor, Module, Type, UnaryOp};
 use elf::ElfBytes;
-
-pub const GP_REGISTER_COUNT: u32 = 31;
-pub const GP_FLAG_COUNT: u32 = 4;
-
-pub const DEFAULT_PARAM_REGISTERS: [Register; 9] = [
-    Register::X0,
-    Register::X1,
-    Register::X2,
-    Register::X3,
-    Register::X4,
-    Register::X5,
-    Register::X6,
-    Register::X7,
-    Register::SP,
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flag {
-    Carry,
-    Negative,
-    Zero,
-    Overflow,
-}
-
-impl Flag {
-    pub fn index(&self) -> u32 {
-        match self {
-            Flag::Carry => 0,
-            Flag::Negative => 1,
-            Flag::Zero => 2,
-            Flag::Overflow => 3,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct RoutineContext<'a> {
     pub global: &'a GlobalContext,
 
-    first_flag_local_index: u32,
-    local_index_by_register: HashMap<Register, u32>,
+    local_index_by_register: HashMap<u32, u32>,
     pub func_return_scratch_local_index: u32,
     pub module: Module,
-    pub return_registers: Vec<Register>,
+    pub return_registers: Vec<u32>,
     pub svc_return_scratch_local_index: u32,
 }
 
 impl RoutineContext<'_> {
-    pub fn read_flag(&self, flag: Flag) -> Expression {
-        self.module.local_get(
-            self.first_flag_local_index + flag.index(),
-            self.module.i32(),
-        )
-    }
-
-    pub fn get_register_local_index(&self, register: Register) -> u32 {
-        use Register::*;
-
+    pub fn get_register_local_index(&self, register: u32) -> u32 {
         self.local_index_by_register
             .get(&register)
             .copied()
             .unwrap()
     }
 
-    pub fn read_register(&self, register: Register, variant: SizeVariant) -> Expression {
-        match register {
-            Register::XZR => match variant {
-                SizeVariant::Reg32 => self.module.const_(0i32),
-                SizeVariant::Reg64 => self.module.const_(0i64),
-            },
-            _ => {
-                let expr = self
-                    .module
-                    .local_get(self.get_register_local_index(register), self.module.i64());
+    pub fn read_register(&self, register: u32, width: Width) -> Expression {
+        if self.global.architecture.is_zero_register(register) {
+            return match width {
+                Width::W32 => self.module.const_(0i32),
+                Width::W64 => self.module.const_(0i64),
+            };
+        }
 
-                match variant {
-                    SizeVariant::Reg32 => self.module.unary(expr, UnaryOp::WrapInt64),
-                    SizeVariant::Reg64 => expr,
-                }
-            }
+        let storage_width = self.global.architecture.local_width(register);
+        let local_index = self.get_register_local_index(register);
+
+        let local_type = match storage_width {
+            Width::W32 => self.module.i32(),
+            Width::W64 => self.module.i64(),
+        };
+
+        let expr = self.module.local_get(local_index, local_type);
+
+        match (storage_width, width) {
+            (Width::W64, Width::W32) => self.module.unary(expr, UnaryOp::WrapInt64),
+            (Width::W32, Width::W64) => self.module.unary(expr, UnaryOp::ExtendUInt32),
+            (Width::W64, Width::W64) | (Width::W32, Width::W32) => expr,
         }
     }
 
-    pub fn write_flag(&self, flag: Flag, value: Expression) -> Expression {
+    pub fn write_register(&self, register: u32, width: Width, value: Expression) -> Expression {
+        if self.global.architecture.is_zero_register(register) {
+            return self.module.nop();
+        }
+
+        let storage_width = self.global.architecture.local_width(register);
+
+        let value = match (storage_width, width) {
+            (Width::W64, Width::W32) => self.module.unary(value, UnaryOp::ExtendUInt32),
+            (Width::W32, Width::W64) => self.module.unary(value, UnaryOp::WrapInt64),
+            (Width::W64, Width::W64) | (Width::W32, Width::W32) => value,
+        };
+
         self.module
-            .local_set(self.first_flag_local_index + flag.index(), value)
-    }
-
-    pub fn write_register(
-        &self,
-        register: Register,
-        variant: SizeVariant,
-        value: Expression,
-    ) -> Expression {
-        match register {
-            Register::XZR => self.module.nop(),
-            _ => {
-                let value = match variant {
-                    SizeVariant::Reg32 => self.module.unary(value, UnaryOp::ExtendUInt32),
-                    SizeVariant::Reg64 => value,
-                };
-
-                self.module
-                    .local_set(self.get_register_local_index(register), value)
-            }
-        }
+            .local_set(self.get_register_local_index(register), value)
     }
 }
-
-pub const SVC_PARAM_REGISTERS: [Register; 7] = [
-    Register::X8,
-    Register::X0,
-    Register::X1,
-    Register::X2,
-    Register::X3,
-    Register::X4,
-    Register::X5,
-];
-
-pub const SVC_RETURN_REGISTERS: [Register; 2] = [Register::X0, Register::X1];
 
 #[derive(Debug)]
 pub struct GlobalContext {
     module: Module,
 
     pub analysis: Analysis,
+    pub architecture: Box<dyn Architecture>,
     pub function_names: Vec<String>,
     pub memory_name: CString,
     pub svc_function_name: String,
@@ -144,14 +83,14 @@ pub struct GlobalContext {
 }
 
 impl GlobalContext {
-    pub fn translate_elf(bytes: &[u8]) -> Result<Module, Box<dyn std::error::Error>> {
+    pub fn translate_elf(
+        bytes: &[u8],
+        architecture: Box<dyn Architecture>,
+    ) -> Result<Module, Box<dyn std::error::Error>> {
         // TODO: Avoid redundancy
         let elf_file = ElfFile::minimal_parse(bytes)?;
 
-        // let shared_library_analysis = analyze_shared_library(&elf_file)?;
-        // eprintln!("Shared library analysis: {:#?}", shared_library_analysis);
-
-        let analysis = crate::analysis::analyze(bytes, &elf_file)?;
+        let analysis = crate::analysis::analyze(bytes, &elf_file, architecture.as_ref())?;
 
         let module = Module::new();
 
@@ -168,8 +107,11 @@ impl GlobalContext {
             })
             .collect::<Vec<_>>();
 
+        let svc_return_registers = architecture.svc_return_registers();
+        let svc_param_registers = architecture.svc_param_registers();
+
         let svc_return_type = module.tuple_type(
-            &SVC_RETURN_REGISTERS
+            &svc_return_registers
                 .iter()
                 .map(|_| module.i64())
                 .collect::<Vec<_>>(),
@@ -182,7 +124,7 @@ impl GlobalContext {
             "ref",
             "supervisor_call",
             &(std::iter::once(module.i32())
-                .chain(SVC_PARAM_REGISTERS.iter().map(|_| module.i64()))
+                .chain(svc_param_registers.iter().map(|_| module.i64()))
                 .collect::<Vec<_>>()),
             svc_return_type.clone(),
         );
@@ -196,29 +138,18 @@ impl GlobalContext {
             module: module.clone(),
             svc_function_name: svc_function_name.to_string(),
             svc_return_type,
+            architecture,
         };
 
         for (routine_index, routine) in context.analysis.routines.iter().enumerate() {
             let function_name = &context.function_names[routine_index];
 
-            if routine.name.as_deref() == Some("strlen") || true {
-                context.translate_routine(routine, function_name);
-            }
+            context.translate_routine(routine, function_name);
         }
 
         if let Some(entry_routine_index) = context.analysis.entry_routine_index {
-            // TODO: Avoid redundancy
-            let param_registers = [
-                Register::X0,
-                Register::X1,
-                Register::X2,
-                Register::X3,
-                Register::X4,
-                Register::X5,
-                Register::X6,
-                Register::X7,
-                Register::SP,
-            ];
+            let param_registers = context.architecture.param_registers();
+            let stack_pointer_register = context.architecture.stack_pointer_register();
 
             let param_types = param_registers
                 .iter()
@@ -227,9 +158,12 @@ impl GlobalContext {
 
             let arg_exprs = param_registers
                 .iter()
-                .map(|reg| match *reg {
-                    Register::SP => module.const_(memory_info.stack_internal_address as i64),
-                    _ => module.const_(0i64),
+                .map(|reg| {
+                    if *reg == stack_pointer_register {
+                        module.const_(memory_info.stack_internal_address as i64)
+                    } else {
+                        module.const_(0i64)
+                    }
                 })
                 .collect::<Vec<_>>();
 
@@ -263,7 +197,7 @@ impl GlobalContext {
 
         // Allocate parameters and locals
 
-        let param_registers = DEFAULT_PARAM_REGISTERS;
+        let param_registers = self.architecture.param_registers();
         let param_count = param_registers.len() as u32;
 
         let param_types = param_registers
@@ -291,25 +225,17 @@ impl GlobalContext {
         local_types.push(module.i32());
         next_local_index += 1;
 
-        for reg_index in 0..GP_REGISTER_COUNT {
-            let reg = Register::decode(reg_index, false, true);
-
+        for reg in self.architecture.all_registers() {
             if !local_index_by_register.contains_key(&reg) {
                 let local_index = next_local_index;
                 next_local_index += 1;
 
                 local_index_by_register.insert(reg, local_index);
-                local_types.push(module.i64());
+                local_types.push(match self.architecture.local_width(reg) {
+                    Width::W32 => module.i32(),
+                    Width::W64 => module.i64(),
+                });
             }
-        }
-
-        let first_flag_local_index = next_local_index;
-
-        for _ in 0..GP_FLAG_COUNT {
-            let local_index = next_local_index;
-            next_local_index += 1;
-
-            local_types.push(module.i32());
         }
 
         // Additional locals for temporary values
@@ -330,11 +256,10 @@ impl GlobalContext {
         let context = RoutineContext {
             global: self,
 
-            first_flag_local_index,
             func_return_scratch_local_index,
             local_index_by_register,
             module: module.clone(),
-            return_registers: param_registers.to_vec(),
+            return_registers: param_registers.clone(),
             svc_return_scratch_local_index,
         };
 
@@ -347,10 +272,10 @@ impl GlobalContext {
                 let mut block_exprs = Vec::new();
 
                 for (instruction_index, instruction) in block.instructions.iter().enumerate() {
-                    let current_address =
-                        block.start_address + (instruction_index as u64) * INSTRUCTION_SIZE;
+                    let current_address = block.start_address
+                        + (instruction_index as u64) * self.architecture.instruction_size();
 
-                    context.translate_instruction(current_address, instruction, &mut block_exprs);
+                    instruction.translate(&context, current_address, &mut block_exprs);
                 }
 
                 if block.fallthrough_block_index.is_none() && block.jump_block_index.is_none() {
@@ -368,128 +293,20 @@ impl GlobalContext {
             relooper_blocks.push(relooper_block);
         }
 
-        // eprintln!("Blocks: {:#?}", routine.blocks);
-
-        for (block_index, (block, relooper_block)) in routine
-            .blocks
-            .iter()
-            .zip(relooper_blocks.iter())
-            .enumerate()
-        {
-            // eprintln!("Block {}", block_index);
-            // eprintln!("  Instruction count: {}", block.instructions.len());
-            // eprintln!("  Start address: {:#x}", block.start_address);
-            // eprintln!("  End address: {:#x}", block.start_address + (block.instructions.len() as u64) * INSTRUCTION_SIZE);
-            // eprintln!("  Fallthrough block index: {:?}", block.fallthrough_block_index);
-            // eprintln!("  Jump block index: {:?}", block.jump_block_index);
-
+        for (block, relooper_block) in routine.blocks.iter().zip(relooper_blocks.iter()) {
             if let Some(fallthrough_block_index) = block.fallthrough_block_index {
                 relooper.branch(
                     relooper_block,
                     &relooper_blocks[fallthrough_block_index],
                     None,
                 );
-
-                // eprintln!("Branch {} -> {}", block_index, fallthrough_block_index);
             }
 
             if let Some(jump_block_index) = block.jump_block_index {
                 let last_instruction = block.instructions.last().unwrap();
-                let condition_expr = match last_instruction {
-                    Instruction::UnconditionalBranch { .. } => None,
-                    Instruction::BranchConditionally { condition, .. } => Some(match condition {
-                        Condition::EQ => context.read_flag(Flag::Zero),
-                        Condition::NE => {
-                            module.unary(context.read_flag(Flag::Zero), UnaryOp::EqZInt32)
-                        }
-
-                        // N != V
-                        Condition::LT => module.binary(
-                            context.read_flag(Flag::Negative),
-                            context.read_flag(Flag::Overflow),
-                            BinaryOp::NeInt32,
-                        ),
-
-                        // !Z && (N == V)
-                        Condition::GT => module.binary(
-                            module.unary(context.read_flag(Flag::Negative), UnaryOp::EqZInt32),
-                            module.binary(
-                                context.read_flag(Flag::Zero),
-                                context.read_flag(Flag::Overflow),
-                                BinaryOp::EqInt32,
-                            ),
-                            BinaryOp::AndInt32,
-                        ),
-                        _ => {
-                            eprintln!("Unsupported condition: {:?}", condition);
-                            module.const_(1u32)
-                        }
-                    }),
-                    Instruction::CompareAndBranch {
-                        branch_if_zero,
-                        target,
-                        register,
-                        variant,
-                    } => Some(module.binary(
-                        context.read_register(*register, *variant),
-                        match variant {
-                            SizeVariant::Reg32 => module.const_(0i32),
-                            SizeVariant::Reg64 => module.const_(0i64),
-                        },
-                        match (branch_if_zero, variant) {
-                            (false, SizeVariant::Reg32) => BinaryOp::NeInt32,
-                            (false, SizeVariant::Reg64) => BinaryOp::NeInt64,
-                            (true, SizeVariant::Reg32) => BinaryOp::EqInt32,
-                            (true, SizeVariant::Reg64) => BinaryOp::EqInt64,
-                        },
-                    )),
-                    Instruction::TestBitAndBranch {
-                        branch_if_zero,
-                        register,
-                        target,
-                        test_bit,
-                        variant,
-                    } => Some(module.binary(
-                        module.binary(
-                            context.read_register(*register, *variant),
-                            match variant {
-                                SizeVariant::Reg32 => module.const_(*test_bit),
-                                SizeVariant::Reg64 => module.const_(*test_bit as u64),
-                            },
-                            match variant {
-                                SizeVariant::Reg32 => BinaryOp::ShrUInt32,
-                                SizeVariant::Reg64 => BinaryOp::ShrUInt64,
-                            },
-                        ),
-                        match variant {
-                            SizeVariant::Reg32 => module.const_(1i32),
-                            SizeVariant::Reg64 => module.const_(1i64),
-                        },
-                        match (branch_if_zero, variant) {
-                            (false, SizeVariant::Reg32) => BinaryOp::NeInt32,
-                            (false, SizeVariant::Reg64) => BinaryOp::NeInt64,
-                            (true, SizeVariant::Reg32) => BinaryOp::EqInt32,
-                            (true, SizeVariant::Reg64) => BinaryOp::EqInt64,
-                        },
-                    )),
-                    _ => {
-                        panic!(
-                            "Unsupported last instruction in block {}: {:?}",
-                            block_index, last_instruction
-                        );
-                    }
-                };
+                let condition_expr = last_instruction.branch_condition(&context);
 
                 assert!(condition_expr.is_none() || block.fallthrough_block_index.is_some());
-
-                // if condition_expr.is_some() {
-                //     eprintln!(
-                //         "Branch {} -> {} with condition",
-                //         block_index, jump_block_index
-                //     );
-                // } else {
-                //     eprintln!("Branch {} -> {}", block_index, jump_block_index);
-                // }
 
                 let condition_expr = condition_expr.map(|_| module.const_(1u32));
 
@@ -504,7 +321,7 @@ impl GlobalContext {
         routine_exprs.push(relooper.finish(&relooper_blocks[0], relooper_helper_local_index));
 
         let func_block = module.block(module.none(), &routine_exprs);
-        let func = module.function(
+        let _func = module.function(
             function_name,
             &param_types,
             return_type,
@@ -540,8 +357,6 @@ pub fn set_up_memory(
     let mut mapped_segments = Vec::new();
 
     for segment in elf_file.segments().unwrap() {
-        // eprintln!("Segment: {:?}", segment);
-
         if segment.p_type == elf::abi::PT_LOAD {
             mapped_segments.push(MappedSegment {
                 address: segment.p_vaddr,
@@ -564,13 +379,11 @@ pub fn set_up_memory(
     let segments = mapped_segments
         .iter()
         .enumerate()
-        .map(|(i, seg)| {
-            MemorySegmentDescriptor {
-                name: format!("segment_{}", i),
-                data: seg.data,
-                passive: false,
-                offset: module.const_(seg.address)
-            }
+        .map(|(i, seg)| MemorySegmentDescriptor {
+            name: format!("segment_{}", i),
+            data: seg.data,
+            passive: false,
+            offset: module.const_(seg.address),
         })
         .collect::<Vec<_>>();
 

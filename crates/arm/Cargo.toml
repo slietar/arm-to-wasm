@@ -1,0 +1,10 @@
+[package]
+name = "aw-arm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aw-core = { path = "../core" }
+arm-decoder = { path = "../arm-decoder" }
+bnyr = { path = "../../../binaryen-ffi/crates/bnyr" }
+clap = { version = "4.6.1", features = ["cargo", "derive"] }

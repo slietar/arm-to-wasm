@@ -4,10 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-arm-decoder = { path = "../arm-decoder" }
 bnyr = { path = "../../../binaryen-ffi/crates/bnyr" }
-capstone = "0.14.0"
-clap = { version = "4.6.1", features = ["cargo", "derive"] }
-disarm64 = "0.1.26"
 elf = "0.8.0"
-rayon = "1.12.0"
