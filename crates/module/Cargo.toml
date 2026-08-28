@@ -1,7 +1,0 @@
-[package]
-name = "binaryen-module"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-binaryen = { path = "../../../binaryen-rs" }

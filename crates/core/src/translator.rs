@@ -9,8 +9,7 @@ use arm_decoder::{
     instructions::Instruction,
     structures::{Condition, Register, SizeVariant},
 };
-use binaryen::ffi as by;
-use binaryen_module::{BinaryOp, Expression, Module, Type, UnaryOp};
+use bnyr::{BinaryOp, Expression, MemorySegmentDescriptor, Module, Type, UnaryOp};
 use elf::ElfBytes;
 
 pub const GP_REGISTER_COUNT: u32 = 31;
@@ -193,7 +192,7 @@ impl GlobalContext {
         let context = Self {
             analysis,
             function_names,
-            memory_name: memory_info.name,
+            memory_name: CString::new(memory_info.name).unwrap(),
             module: module.clone(),
             svc_function_name: svc_function_name.to_string(),
             svc_return_type,
@@ -527,7 +526,7 @@ struct MappedSegment<'a> {
 
 #[derive(Debug)]
 pub struct MemoryInfo {
-    pub name: CString,
+    pub name: String,
     pub stack_internal_address: u64,
     pub stack_size: u64,
 }
@@ -562,29 +561,17 @@ pub fn set_up_memory(
         .div_ceil(PAGE_SIZE as u64)
         * PAGE_SIZE as u64;
 
-    let segment_names = mapped_segments
+    let segments = mapped_segments
         .iter()
         .enumerate()
-        .map(|(i, _)| CString::new(format!("segment_{}", i)).unwrap())
-        .collect::<Vec<_>>();
-
-    let mut segment_name_ptrs = segment_names.iter().map(|s| s.as_ptr()).collect::<Vec<_>>();
-
-    let mut segment_datas = mapped_segments
-        .iter()
-        .map(|seg| seg.data.as_ptr())
-        .collect::<Vec<_>>();
-
-    let mut segment_passives = vec![false; mapped_segments.len()];
-
-    let mut segment_offsets = mapped_segments
-        .iter()
-        .map(|seg| unsafe { module.const_(seg.address).unsafe_ptr() })
-        .collect::<Vec<_>>();
-
-    let mut segment_sizes = mapped_segments
-        .iter()
-        .map(|seg| seg.size as u32)
+        .map(|(i, seg)| {
+            MemorySegmentDescriptor {
+                name: format!("segment_{}", i),
+                data: seg.data,
+                passive: false,
+                offset: module.const_(seg.address)
+            }
+        })
         .collect::<Vec<_>>();
 
     let mapped_memory_page_count = total_mapped_size.div_ceil(PAGE_SIZE);
@@ -592,28 +579,18 @@ pub fn set_up_memory(
     let stack_memory_page_count = 2;
     let stack_memory_internal_address = mapped_memory_size;
 
-    let memory_name = CString::new(memory_name).unwrap();
-
-    unsafe {
-        by::BinaryenSetMemory(
-            module.unsafe_ptr(),
-            (mapped_memory_page_count + stack_memory_page_count) as u32,
-            u32::MAX,
-            memory_name.as_ptr(),
-            segment_name_ptrs.as_mut_ptr() as *mut *const std::os::raw::c_char,
-            segment_datas.as_mut_ptr() as *mut *const std::os::raw::c_char,
-            segment_passives.as_mut_ptr(),
-            segment_offsets.as_mut_ptr(),
-            segment_sizes.as_mut_ptr(),
-            mapped_segments.len() as u32,
-            false,
-            true,
-            memory_name.as_ptr(),
-        );
-    }
+    module.set_memory(
+        memory_name,
+        memory_name,
+        (mapped_memory_page_count + stack_memory_page_count) as u32,
+        u32::MAX,
+        false,
+        true,
+        &segments,
+    );
 
     MemoryInfo {
-        name: memory_name,
+        name: memory_name.to_string(),
         stack_internal_address: stack_memory_internal_address,
         stack_size: stack_memory_page_count * PAGE_SIZE,
     }

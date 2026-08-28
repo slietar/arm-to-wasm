@@ -6,7 +6,7 @@ use arm_decoder::{
     structures::{Extension, Register, Shift, SizeVariant, Sized, SliceSize, WritebackOffset},
     utilities::INSTRUCTION_SIZE,
 };
-use binaryen_module::{BinaryOp, Expression, LoadVariant, Module, StoreVariant, UnaryOp};
+use bnyr::{BinaryOp, Expression, LoadVariant, Module, StoreVariant, UnaryOp};
 
 use crate::translator::{
     DEFAULT_PARAM_REGISTERS, Flag, RoutineContext, SVC_PARAM_REGISTERS, SVC_RETURN_REGISTERS,

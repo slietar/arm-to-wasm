@@ -5,8 +5,7 @@ edition = "2024"
 
 [dependencies]
 arm-decoder = { path = "../arm-decoder" }
-binaryen = { path = "../../../binaryen-rs" }
-binaryen-module = { path = "../module" }
+bnyr = { path = "../../../binaryen-ffi/crates/bnyr" }
 capstone = "0.14.0"
 clap = { version = "4.6.1", features = ["cargo", "derive"] }
 disarm64 = "0.1.26"
