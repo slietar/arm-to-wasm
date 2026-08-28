@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+use arm_decoder::structures::{AnySize, Sized as _};
 use arm_decoder::{
     instructions::{
-        AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreOffset,
+        AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreIndex,
         LoadStoreOp,
     },
     structures::{Register, SizeVariant, SliceSize, WritebackOffset},
@@ -24,7 +25,7 @@ pub struct Routine {
     pub blocks: Vec<Block>,
     pub name: Option<String>,
     pub stack_size: Option<u64>,
-    pub variables: HashMap<i32, SliceSize>,
+    pub variables: HashMap<i32, AnySize>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,7 +66,7 @@ struct Jump {
 struct StackAccess {
     address: u64,
     offset: i32,
-    size: SliceSize,
+    size: AnySize,
     read: bool,
     write: bool,
 }
@@ -318,10 +319,9 @@ pub fn analyze(
                         stack_entry_size = Some(*offset as u64);
                     }
                     Instruction::LoadStoreRegister {
-                        address: Register::SP,
-                        offset: LoadStoreOffset::Immediate { offset },
+                        address_base: Register::SP,
+                        address_index: LoadStoreIndex::Immediate { offset },
                         op,
-                        size,
                         value,
                     } => {
                         if stack_entry_size.is_none()
@@ -332,12 +332,12 @@ pub fn analyze(
                             stack_entry_size = Some(-offset as u64);
                         }
 
-                        let write = matches!(op, LoadStoreOp::Store);
+                        let write = matches!(op, LoadStoreOp::Store(_));
 
                         stack_accesses.push(StackAccess {
                             address: current_address,
                             offset: offset.access,
-                            size: *size,
+                            size: op.access_size(),
                             read: !write,
                             write,
                         });
@@ -345,8 +345,8 @@ pub fn analyze(
                         is_prologue = false;
                     }
                     Instruction::LoadStorePairOfRegisters {
-                        address: Register::SP,
-                        offset,
+                        address_base: Register::SP,
+                        address_index: offset,
                         op,
                         size,
                         value1,
@@ -361,20 +361,20 @@ pub fn analyze(
                             stack_entry_size = Some(-offset as u64);
                         }
 
-                        let write = matches!(op, LoadStoreOp::Store);
+                        let write = matches!(op, LoadStoreOp::Store(_));
 
                         stack_accesses.push(StackAccess {
                             address: current_address,
                             offset: offset.access,
-                            size: (*size).into(),
+                            size: op.access_size(),
                             read: !write,
                             write,
                         });
 
                         stack_accesses.push(StackAccess {
                             address: current_address,
-                            offset: offset.access + variant.byte_count() as i32,
-                            size: (*variant).into(),
+                            offset: offset.access + (variant.any_size().byte_count() as i32),
+                            size: op.access_size(),
                             read: !write,
                             write,
                         });
@@ -659,7 +659,7 @@ pub fn analyze(
 
         // Variable analysis
 
-        let mut variables = HashMap::<i32, SliceSize>::new();
+        let mut variables = HashMap::<i32, AnySize>::new();
 
         for stack_access in stack_accesses {
             let offset = stack_access.offset;

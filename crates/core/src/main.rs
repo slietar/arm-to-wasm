@@ -4,7 +4,6 @@
 
 mod analysis;
 mod constants;
-mod decoding;
 mod instruction_helper;
 mod shared_library;
 mod translation;

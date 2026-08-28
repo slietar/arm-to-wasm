@@ -115,6 +115,15 @@ pub enum IndexMode {
     Double,
 }
 
+impl IndexMode {
+    pub fn variant(&self) -> SizeVariant {
+        match self {
+            IndexMode::UnsignedSingle | IndexMode::SignedSingle => SizeVariant::Reg32,
+            IndexMode::Double => SizeVariant::Reg64,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GPLoadMode {
     UnsignedByte,
@@ -132,7 +141,7 @@ pub enum GPLoadMode {
 }
 
 impl GPLoadMode {
-    fn access_size(&self) -> SliceSize {
+    pub fn access_size(&self) -> SliceSize {
         match self {
             GPLoadMode::UnsignedByte
             | GPLoadMode::SignedByteToSingle
@@ -145,7 +154,7 @@ impl GPLoadMode {
         }
     }
 
-    fn register_size(&self) -> SizeVariant {
+    pub fn register_size(&self) -> SizeVariant {
         use GPLoadMode::*;
 
         match self {

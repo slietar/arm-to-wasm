@@ -1,9 +1,9 @@
 use arm_decoder::{
     instructions::{
-        AddSubtractOp, AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreOffset,
-        LoadStoreOp, LogicalImmediateOperand, LogicalOp,
+        AddSubtractOp, AddSubtractRightOperand, BivalentObject, BranchTarget, GPLoadMode,
+        IndexMode, Instruction, LoadStoreIndex, LoadStoreOp, LogicalImmediateOperand, LogicalOp,
     },
-    structures::{Extension, Register, Shift, SizeVariant, SliceSize, WritebackOffset},
+    structures::{Extension, Register, Shift, SizeVariant, Sized, SliceSize, WritebackOffset},
     utilities::INSTRUCTION_SIZE,
 };
 use binaryen_module::{BinaryOp, Expression, LoadVariant, Module, StoreVariant, UnaryOp};
@@ -310,16 +310,15 @@ impl RoutineContext<'_> {
             }
 
             Instruction::LoadStoreRegister {
-                address,
-                offset,
+                address_base: address,
+                address_index: offset,
                 op,
-                size,
                 value,
             } => {
                 let base_address_expr = self.read_register(*address, SizeVariant::Reg64);
 
                 let (address_expr, access_offset) = match offset {
-                    LoadStoreOffset::Immediate { offset } => {
+                    LoadStoreIndex::Immediate { offset } => {
                         if offset.access < 0 {
                             (
                                 self.module.binary(
@@ -333,23 +332,21 @@ impl RoutineContext<'_> {
                             (base_address_expr, offset.access as u32)
                         }
                     }
-                    LoadStoreOffset::Register {
-                        extension,
+                    LoadStoreIndex::Register {
+                        mode,
                         register,
                         shift_amount,
                     } => {
-                        let mut offset_expr =
-                            self.read_register(*register, extension.size.cover_variant());
+                        let mut offset_expr = self.read_register(*register, mode.variant());
 
-                        match *extension {
-                            Extension::UXTW => {
+                        match *mode {
+                            IndexMode::UnsignedSingle => {
                                 offset_expr = self.module.unary(offset_expr, UnaryOp::ExtendUInt32);
                             }
-                            Extension::SXTW => {
+                            IndexMode::SignedSingle => {
                                 offset_expr = self.module.unary(offset_expr, UnaryOp::ExtendSInt32);
                             }
-                            Extension::SXTX | Extension::UXTX => {}
-                            _ => unreachable!(),
+                            IndexMode::Double => {}
                         }
 
                         (
@@ -368,7 +365,7 @@ impl RoutineContext<'_> {
                 };
 
                 match op {
-                    LoadStoreOp::Store => {
+                    LoadStoreOp::Store(BivalentObject::GeneralPurpose(size)) => {
                         let value_expr = self.read_register(*value, size.cover_variant());
                         let store_variant = match size {
                             SliceSize::Byte => StoreVariant::I32L8,
@@ -386,26 +383,19 @@ impl RoutineContext<'_> {
                             &self.global.memory_name,
                         ));
                     }
-                    LoadStoreOp::LoadSignExtend { .. } | LoadStoreOp::LoadZeroExtend => {
-                        let (variant, signed) = match op {
-                            LoadStoreOp::LoadSignExtend { variant } => (*variant, true),
-                            LoadStoreOp::LoadZeroExtend => (size.cover_variant(), false),
-                            _ => unreachable!(),
-                        };
-
-                        let load_variant = match (size, variant) {
-                            (SliceSize::Byte, SizeVariant::Reg32) => LoadVariant::I32L8 { signed },
-                            (SliceSize::Byte, SizeVariant::Reg64) => LoadVariant::I64L16 { signed },
-                            (SliceSize::Halfword, SizeVariant::Reg32) => {
-                                LoadVariant::I32L16 { signed }
+                    LoadStoreOp::Load(BivalentObject::GeneralPurpose(mode)) => {
+                        let load_variant = match mode {
+                            GPLoadMode::UnsignedByte => LoadVariant::I32L8 { signed: false },
+                            GPLoadMode::SignedByteToSingle => LoadVariant::I32L8 { signed: true },
+                            GPLoadMode::SignedByteToDouble => LoadVariant::I64L8 { signed: true },
+                            GPLoadMode::UnsignedHalf => LoadVariant::I32L16 { signed: false },
+                            GPLoadMode::SignedHalfToSingle => LoadVariant::I32L16 { signed: true },
+                            GPLoadMode::SignedHalfToDouble => LoadVariant::I64L16 { signed: true },
+                            GPLoadMode::UnsignedSingle => LoadVariant::I32,
+                            GPLoadMode::SignedSingleToDouble => {
+                                LoadVariant::I64L32 { signed: true }
                             }
-                            (SliceSize::Halfword, SizeVariant::Reg64) => {
-                                LoadVariant::I64L16 { signed }
-                            }
-                            (SliceSize::Word, SizeVariant::Reg32) => LoadVariant::I32,
-                            (SliceSize::Word, SizeVariant::Reg64) => LoadVariant::I64L32 { signed },
-                            (SliceSize::Doubleword, SizeVariant::Reg64) => LoadVariant::I64,
-                            _ => unreachable!(),
+                            GPLoadMode::Double => LoadVariant::I64,
                         };
 
                         let loaded_expr = self.module.load(
@@ -418,13 +408,14 @@ impl RoutineContext<'_> {
 
                         block_exprs.push(self.write_register(
                             *value,
-                            size.cover_variant(),
+                            mode.register_size(),
                             loaded_expr,
                         ));
                     }
+                    _ => todo!(),
                 }
 
-                if let LoadStoreOffset::Immediate {
+                if let LoadStoreIndex::Immediate {
                     offset:
                         WritebackOffset {
                             access: _,

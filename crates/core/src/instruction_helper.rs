@@ -1,6 +1,6 @@
 use arm_decoder::{
     instructions::{
-        AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreOffset, LoadStoreOp,
+        AddSubtractRightOperand, BranchTarget, Instruction, LoadStoreIndex, LoadStoreOp,
         LogicalImmediateOperand,
     },
     structures::{Register, SizeVariant, SliceSize},
@@ -75,18 +75,17 @@ impl InstructionInfo for Instruction {
             ],
             FormPCRelativeAddress { .. } => Vec::new(),
             LoadStoreRegister {
-                address,
-                offset,
+                address_base: base_address,
+                address_index: offset,
                 op,
-                size,
                 value,
             } => {
                 let mut regs = vec![SizedRegister {
-                    register: *address,
+                    register: *base_address,
                     variant: SizeVariant::Reg64,
                 }];
 
-                if let LoadStoreOffset::Register { register, .. } = offset {
+                if let LoadStoreIndex::Register { register, .. } = offset {
                     regs.push(SizedRegister {
                         register: *register,
 
@@ -95,17 +94,18 @@ impl InstructionInfo for Instruction {
                     });
                 }
 
-                if matches!(op, LoadStoreOp::Store) {
-                    regs.push(SizedRegister {
-                        register: *value,
-                        variant: size.cover_variant(),
-                    });
-                }
+                // TODO: Restore
+                // if matches!(op, LoadStoreOp::Store(_)) {
+                //     regs.push(SizedRegister {
+                //         register: *value,
+                //         variant: size.cover_variant(),
+                //     });
+                // }
 
                 regs
             }
             LoadStorePairOfRegisters {
-                address,
+                address_base: address,
                 op,
                 value1,
                 value2,
@@ -117,7 +117,7 @@ impl InstructionInfo for Instruction {
                     variant: SizeVariant::Reg64,
                 }];
 
-                if matches!(op, LoadStoreOp::Store) {
+                if matches!(op, LoadStoreOp::Store(_)) {
                     regs.push(SizedRegister {
                         register: *value1,
                         variant: *variant,
@@ -245,41 +245,46 @@ impl InstructionInfo for Instruction {
                 variant: SizeVariant::Reg64,
             }],
             LoadLiteral {
-                destination, size, ..
-            } => vec![SizedRegister {
-                register: *destination,
-                variant: size.cover_variant(),
-            }],
+                destination, op, ..
+            } => {
+                // TODO: Restore
+                //     vec![SizedRegister {
+                //     register: *destination,
+                //     variant: size.cover_variant(),
+                // }]
+
+                Vec::new()
+            }
             LoadStoreRegister {
-                address,
-                offset,
+                address_base: base_address,
+                address_index: offset,
                 op,
-                size,
                 value,
             } => {
                 let mut regs = Vec::new();
 
-                if let LoadStoreOffset::Immediate { offset } = offset
+                if let LoadStoreIndex::Immediate { offset } = offset
                     && offset.writeback.is_some()
                 {
                     regs.push(SizedRegister {
-                        register: *address,
+                        register: *base_address,
                         variant: SizeVariant::Reg64,
                     });
                 }
 
-                if !matches!(op, LoadStoreOp::Store) {
-                    regs.push(SizedRegister {
-                        register: *value,
-                        variant: size.cover_variant(),
-                    });
-                }
+                // TODO: Restore
+                // if !matches!(op, LoadStoreOp::Store) {
+                //     regs.push(SizedRegister {
+                //         register: *value,
+                //         variant: size.cover_variant(),
+                //     });
+                // }
 
                 regs
             }
             LoadStorePairOfRegisters {
-                address,
-                offset,
+                address_base: base_address,
+                address_index: offset,
                 op,
                 value1,
                 value2,
@@ -290,21 +295,22 @@ impl InstructionInfo for Instruction {
 
                 if offset.writeback.is_some() {
                     regs.push(SizedRegister {
-                        register: *address,
+                        register: *base_address,
                         variant: SizeVariant::Reg64,
                     });
                 }
 
-                if !matches!(op, LoadStoreOp::Store) {
-                    regs.push(SizedRegister {
-                        register: *value1,
-                        variant: *variant,
-                    });
-                    regs.push(SizedRegister {
-                        register: *value2,
-                        variant: *variant,
-                    });
-                }
+                // TODO: Restore
+                // if !matches!(op, LoadStoreOp::Store) {
+                //     regs.push(SizedRegister {
+                //         register: *value1,
+                //         variant: *variant,
+                //     });
+                //     regs.push(SizedRegister {
+                //         register: *value2,
+                //         variant: *variant,
+                //     });
+                // }
 
                 regs
             }

@@ -96,6 +96,15 @@ pub enum SizeVariant {
     Reg64,
 }
 
+impl SizeVariant {
+    pub fn any_size(&self) -> AnySize {
+        match self {
+            SizeVariant::Reg32 => AnySize::Single,
+            SizeVariant::Reg64 => AnySize::Double,
+        }
+    }
+}
+
 impl Sized for SizeVariant {
     fn log_byte_count(&self) -> u64 {
         match self {
@@ -387,6 +396,22 @@ pub enum AnySize {
     Quad,
 }
 
+impl AnySize {
+    pub fn max(&self, other: &Self) -> Self {
+        match (self, other) {
+            (AnySize::Byte, _) => *other,
+            (_, AnySize::Byte) => *self,
+            (AnySize::Half, _) => *other,
+            (_, AnySize::Half) => *self,
+            (AnySize::Single, _) => *other,
+            (_, AnySize::Single) => *self,
+            (AnySize::Double, _) => *other,
+            (_, AnySize::Double) => *self,
+            (AnySize::Quad, AnySize::Quad) => AnySize::Quad,
+        }
+    }
+}
+
 impl Sized for AnySize {
     fn log_byte_count(&self) -> u64 {
         match self {
@@ -434,9 +459,7 @@ pub enum Arrangement {
 
 pub trait Sized {
     fn log_byte_count(&self) -> u64;
-}
 
-impl dyn Sized {
     fn byte_count(&self) -> u64 {
         1 << self.log_byte_count()
     }
