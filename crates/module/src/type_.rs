@@ -32,9 +32,7 @@ impl Module {
         let mut type_ptrs: Vec<_> = types.iter().map(|t| t.ptr).collect();
 
         Type {
-            ptr: unsafe {
-                by::BinaryenTypeCreate(type_ptrs.as_mut_ptr(), type_ptrs.len() as u32)
-            },
+            ptr: unsafe { by::BinaryenTypeCreate(type_ptrs.as_mut_ptr(), type_ptrs.len() as u32) },
         }
     }
 }

@@ -1,8 +1,9 @@
 use crate::{
     instructions::{
-        BitfieldMoveMode, ConvertFPIntegerOp, FPMoveDirection, FPMoveFPSize, FPProcessingOp, FPToIntegerRoundingMode, Instruction, LogicalOp, SIMDTripleOp
+        BitfieldMoveMode, ConvertFPIntegerOp, FPMoveDirection, FPMoveFPSize, FPProcessingOp,
+        FPToIntegerRoundingMode, Instruction, LogicalOp, SIMDTripleOp,
     },
-    structures::{Arrangement, AnySize, InstructionBytes, Shift, SizeVariant},
+    structures::{AnySize, Arrangement, InstructionBytes, Shift, SizeVariant},
     utilities::equal_masked,
 };
 
@@ -31,7 +32,7 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
                 fp_size: match (
                     bytes.immediate_unsigned(22, 2),
                     bytes.immediate_unsigned(19, 2),
-                 ) {
+                ) {
                     (0b11, 0b00) => FPMoveFPSize::Half,
                     (0b00, 0b00) => FPMoveFPSize::Single,
                     (0b01, 0b00) => FPMoveFPSize::LowerDouble,
@@ -43,42 +44,63 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
                     bytes.register_simd(5)
                 } else {
                     bytes.register(5, false)
-                }
+                },
             });
         }
 
-        let (op, signed) = match (
-            opcode,
-            bytes.immediate_unsigned(19, 2)
-         ) {
-            (0b000, 0b00) => (ConvertFPIntegerOp::FPToInteger {
-                rounding_mode: FPToIntegerRoundingMode::Even,
-            }, true),
-            (0b001, 0b00) => (ConvertFPIntegerOp::FPToInteger {
-                rounding_mode: FPToIntegerRoundingMode::Even,
-            }, false),
+        let (op, signed) = match (opcode, bytes.immediate_unsigned(19, 2)) {
+            (0b000, 0b00) => (
+                ConvertFPIntegerOp::FPToInteger {
+                    rounding_mode: FPToIntegerRoundingMode::Even,
+                },
+                true,
+            ),
+            (0b001, 0b00) => (
+                ConvertFPIntegerOp::FPToInteger {
+                    rounding_mode: FPToIntegerRoundingMode::Even,
+                },
+                false,
+            ),
             (0b010, 0b00) => (ConvertFPIntegerOp::IntegerToFP, true),
             (0b011, 0b00) => (ConvertFPIntegerOp::IntegerToFP, false),
-            (0b100, 0b00) => (ConvertFPIntegerOp::FPToInteger {
-                rounding_mode: FPToIntegerRoundingMode::Away,
-            }, true),
-            (0b101, 0b00) => (ConvertFPIntegerOp::FPToInteger {
-                rounding_mode: FPToIntegerRoundingMode::Away,
-            }, false),
+            (0b100, 0b00) => (
+                ConvertFPIntegerOp::FPToInteger {
+                    rounding_mode: FPToIntegerRoundingMode::Away,
+                },
+                true,
+            ),
+            (0b101, 0b00) => (
+                ConvertFPIntegerOp::FPToInteger {
+                    rounding_mode: FPToIntegerRoundingMode::Away,
+                },
+                false,
+            ),
             (0b110, 0b00) => unreachable!(),
             (0b111, 0b00) => unreachable!(),
-            (0b000, 0b01) => (ConvertFPIntegerOp::FPToInteger {
-                rounding_mode: FPToIntegerRoundingMode::PlusInfinity,
-            }, true),
-            (0b001, 0b01) => (ConvertFPIntegerOp::FPToInteger {
-                rounding_mode: FPToIntegerRoundingMode::PlusInfinity,
-            }, false),
-            (0b001, 0b10) => (ConvertFPIntegerOp::FPToInteger {
-                rounding_mode: FPToIntegerRoundingMode::MinusInfinity,
-            }, false),
-            (0b000, 0b10) => (ConvertFPIntegerOp::FPToInteger {
-                rounding_mode: FPToIntegerRoundingMode::MinusInfinity,
-            }, true),
+            (0b000, 0b01) => (
+                ConvertFPIntegerOp::FPToInteger {
+                    rounding_mode: FPToIntegerRoundingMode::PlusInfinity,
+                },
+                true,
+            ),
+            (0b001, 0b01) => (
+                ConvertFPIntegerOp::FPToInteger {
+                    rounding_mode: FPToIntegerRoundingMode::PlusInfinity,
+                },
+                false,
+            ),
+            (0b001, 0b10) => (
+                ConvertFPIntegerOp::FPToInteger {
+                    rounding_mode: FPToIntegerRoundingMode::MinusInfinity,
+                },
+                false,
+            ),
+            (0b000, 0b10) => (
+                ConvertFPIntegerOp::FPToInteger {
+                    rounding_mode: FPToIntegerRoundingMode::MinusInfinity,
+                },
+                true,
+            ),
 
             // FJCVTZS
             (0b110, 0b11) => todo!(),
@@ -105,7 +127,7 @@ pub fn decode(bytes: InstructionBytes) -> Option<Instruction> {
                 bytes.register_simd(5)
             } else {
                 bytes.register(5, false)
-            }
+            },
         });
     }
 

@@ -48,7 +48,9 @@ impl Relooper {
     pub fn finish(self, entry: &RelooperBlock, label_helper: u32) -> Expression {
         Expression {
             _module: self.module,
-            ptr: unsafe { by::RelooperRenderAndDispose(self.by_relooper, entry.by_block, label_helper) },
+            ptr: unsafe {
+                by::RelooperRenderAndDispose(self.by_relooper, entry.by_block, label_helper)
+            },
         }
     }
 }

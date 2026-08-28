@@ -5,11 +5,11 @@ mod bitfield;
 mod branch;
 mod loadstore;
 // mod loadstore_pair;
+mod float;
 mod logical;
 mod misc;
 mod movewide;
 mod select;
-mod float;
 
 pub fn decode(value: u32) -> Instruction {
     let bytes = InstructionBytes(value);

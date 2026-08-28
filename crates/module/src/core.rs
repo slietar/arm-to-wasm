@@ -98,11 +98,5 @@ fn test_module() {
 
     assert!(module.validate());
 
-    module.function(
-        "test",
-        &[],
-        module.none(),
-        &[],
-        module.nop(),
-    );
+    module.function("test", &[], module.none(), &[], module.nop());
 }
