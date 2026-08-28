@@ -3,9 +3,12 @@ resolver = "3"
 members = [
     "crates/arm-decoder",
     "crates/core",
+    "crates/module",
     "crates/runtime",
 ]
 exclude = [
     "examples/rust-nostd",
     "examples/rust-std",
+    "examples/rust-musl-riscv",
+    "examples/rust-nostd-riscv",
 ]

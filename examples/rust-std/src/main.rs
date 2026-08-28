@@ -1,6 +1,3 @@
-// #![no_std]
-// #![no_main]
-
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]
@@ -24,5 +21,6 @@ fn foobar(
 }
 
 pub fn main() {
-    foobar(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+    // foobar(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+    println!("Hello, world!");
 }
