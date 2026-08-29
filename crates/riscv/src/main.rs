@@ -38,6 +38,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let optimize = subcommand_matches.get_flag("optimize");
 
             if ok {
+                module.print();
+
                 if optimize {
                     module.optimize();
                 }

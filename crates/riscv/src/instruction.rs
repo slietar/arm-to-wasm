@@ -1,6 +1,6 @@
 use aw_core::architecture::{BranchKind, Instr, StackAccess};
 use aw_core::translator::RoutineContext;
-use bnyr::Expression;
+use bnyr::{BinaryOp, Expression};
 use raki::{BaseIOpcode, COpcode, Instruction, OpcodeKind};
 
 /// Return-address register (`ra` / `x1`).
@@ -11,26 +11,81 @@ const ZERO: usize = 0;
 #[derive(Debug)]
 pub struct RiscVInstruction(pub Instruction);
 
+fn register_to_local_index(register: usize) -> u32 {
+    (register as u32) - 1
+}
+
+impl RiscVInstruction {
+    fn read_register(&self, ctx: &RoutineContext, register: usize) -> Expression {
+        if register == ZERO {
+            ctx.module.const_(0)
+        } else {
+            ctx.read_local(register_to_local_index(register))
+        }
+    }
+
+    fn write_register(
+        &self,
+        ctx: &RoutineContext,
+        register: usize,
+        value: Expression,
+    ) -> Expression {
+        if register == ZERO {
+            ctx.module.nop()
+        } else {
+            ctx.write_local(register_to_local_index(register), value)
+        }
+    }
+}
+
 impl Instr for RiscVInstruction {
     fn size(&self) -> u64 {
-        if self.0.is_compressed {
-            2
-        } else {
-            4
-        }
+        if self.0.is_compressed { 2 } else { 4 }
     }
 
     fn translate(
         &self,
-        _ctx: &RoutineContext,
+        ctx: &RoutineContext,
         _current_address: u64,
-        _block_exprs: &mut Vec<Expression>,
+        block_exprs: &mut Vec<Expression>,
     ) {
-        todo!("RISC-V instruction translation is not implemented yet")
+        // todo!("RISC-V instruction translation is not implemented yet")
+        // block_exprs.push(ctx.module.nop());
+
+        match &self.0.opc {
+            OpcodeKind::BaseI(BaseIOpcode::ADDI) | OpcodeKind::C(COpcode::ADDI) => block_exprs
+                .push(self.write_register(
+                    ctx,
+                    self.0.rd.unwrap(),
+                    ctx.module.binary(
+                        self.read_register(ctx, self.0.rs1.unwrap()),
+                        ctx.module.const_(self.0.imm.unwrap() as i64),
+                        BinaryOp::AddInt64,
+                    ),
+                )),
+            OpcodeKind::C(COpcode::LI) => block_exprs.push(self.write_register(
+                ctx,
+                self.0.rd.unwrap(),
+                ctx.module.const_(self.0.imm.unwrap() as i64),
+            )),
+            _ => {
+                eprintln!("Unimplemented RISC-V instruction: {:?}", self.0);
+            }
+        }
     }
 
     fn branch_condition(&self, _ctx: &RoutineContext) -> Option<Expression> {
-        todo!("RISC-V branch conditions are not implemented yet")
+        // todo!("RISC-V branch conditions are not implemented yet")
+        eprintln!("Unimplemented RISC-V branch condition: {:?}", self.0);
+
+        match &self.0.opc {
+            OpcodeKind::BaseI(BaseIOpcode::BLT) => Some(_ctx.module.binary(
+                _ctx.read_local(register_to_local_index(self.0.rs1.unwrap())),
+                _ctx.read_local(register_to_local_index(self.0.rs2.unwrap())),
+                BinaryOp::LtSInt64,
+            )),
+            _ => None,
+        }
     }
 
     fn branch_kind(&self, address: u64) -> BranchKind {

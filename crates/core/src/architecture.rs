@@ -41,14 +41,26 @@ pub trait Instr: std::fmt::Debug {
     fn registers_written(&self) -> Vec<u32>;
 }
 
+#[derive(Debug)]
+pub enum LocalType {
+    F32,
+    F64,
+    I32,
+    I64,
+}
+
+#[derive(Debug)]
+pub struct LocalDescriptor {
+    pub argument: bool,
+    pub return_value: bool,
+    pub type_: LocalType,
+}
+
 pub trait Architecture: std::fmt::Debug {
     fn instruction_size(&self) -> u64;
     fn decode_instructions(&self, bytes: &[u8]) -> Vec<Box<dyn Instr>>;
 
-    /// Every register id that needs a local allocated for it.
-    fn all_registers(&self) -> Vec<u32>;
-    /// Storage width of the local backing this register.
-    fn local_width(&self, register: u32) -> Width;
+    fn locals(&self) -> Vec<LocalDescriptor>;
 
     fn param_registers(&self) -> Vec<u32>;
     fn svc_param_registers(&self) -> Vec<u32>;

@@ -2,7 +2,7 @@ use std::{collections::HashMap, ffi::CString};
 
 use crate::{
     analysis::{Analysis, ElfFile, Routine},
-    architecture::{Architecture, Width},
+    architecture::{Architecture, LocalDescriptor, LocalType, Width},
     constants::PAGE_SIZE,
 };
 use bnyr::{Expression, MemorySegmentDescriptor, Module, Type, UnaryOp};
@@ -12,62 +12,84 @@ use elf::ElfBytes;
 pub struct RoutineContext<'a> {
     pub global: &'a GlobalContext,
 
-    local_index_by_register: HashMap<u32, u32>,
-    pub func_return_scratch_local_index: u32,
+    local_descriptors: Vec<LocalDescriptor>,
+    local_index_by_external_local_index: HashMap<u32, u32>,
+    func_return_scratch_local_index: u32,
     pub module: Module,
-    pub return_registers: Vec<u32>,
     pub svc_return_scratch_local_index: u32,
 }
 
 impl RoutineContext<'_> {
-    pub fn get_register_local_index(&self, register: u32) -> u32 {
-        self.local_index_by_register
-            .get(&register)
-            .copied()
-            .unwrap()
+    pub fn read_local(&self, local_index: u32) -> Expression {
+        let descriptor = &self.local_descriptors[local_index as usize];
+        let local_type = self.global.local_type_to_type(&descriptor.type_);
+        self.module.local_get(local_index, local_type)
     }
 
-    pub fn read_register(&self, register: u32, width: Width) -> Expression {
-        if self.global.architecture.is_zero_register(register) {
-            return match width {
-                Width::W32 => self.module.const_(0i32),
-                Width::W64 => self.module.const_(0i64),
-            };
-        }
-
-        let storage_width = self.global.architecture.local_width(register);
-        let local_index = self.get_register_local_index(register);
-
-        let local_type = match storage_width {
-            Width::W32 => self.module.i32(),
-            Width::W64 => self.module.i64(),
-        };
-
-        let expr = self.module.local_get(local_index, local_type);
-
-        match (storage_width, width) {
-            (Width::W64, Width::W32) => self.module.unary(expr, UnaryOp::WrapInt64),
-            (Width::W32, Width::W64) => self.module.unary(expr, UnaryOp::ExtendUInt32),
-            (Width::W64, Width::W64) | (Width::W32, Width::W32) => expr,
-        }
+    pub fn write_local(&self, local_index: u32, value: Expression) -> Expression {
+        let descriptor = &self.local_descriptors[local_index as usize];
+        let local_type = self.global.local_type_to_type(&descriptor.type_);
+        self.module.local_set(local_index, value)
     }
 
-    pub fn write_register(&self, register: u32, width: Width, value: Expression) -> Expression {
-        if self.global.architecture.is_zero_register(register) {
-            return self.module.nop();
-        }
-
-        let storage_width = self.global.architecture.local_width(register);
-
-        let value = match (storage_width, width) {
-            (Width::W64, Width::W32) => self.module.unary(value, UnaryOp::ExtendUInt32),
-            (Width::W32, Width::W64) => self.module.unary(value, UnaryOp::WrapInt64),
-            (Width::W64, Width::W64) | (Width::W32, Width::W32) => value,
-        };
+    pub fn return_(&self) -> Expression {
+        self.write_local(
+            self.func_return_scratch_local_index,
+            self.module.tuple(
+                &self.local_descriptors
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, desc)| desc.return_value)
+                    .map(|(i, _)| self.read_local(i as u32))
+                    .collect::<Vec<_>>(),
+            ),
+        );
 
         self.module
-            .local_set(self.get_register_local_index(register), value)
+            .return_(self.read_local(self.func_return_scratch_local_index))
     }
+
+    // pub fn read_register(&self, register: u32, width: Width) -> Expression {
+    //     if self.global.architecture.is_zero_register(register) {
+    //         return match width {
+    //             Width::W32 => self.module.const_(0i32),
+    //             Width::W64 => self.module.const_(0i64),
+    //         };
+    //     }
+
+    //     let storage_width = self.global.architecture.local_width(register);
+    //     let local_index = self.get_register_local_index(register);
+
+    //     let local_type = match storage_width {
+    //         Width::W32 => self.module.i32(),
+    //         Width::W64 => self.module.i64(),
+    //     };
+
+    //     let expr = self.module.local_get(local_index, local_type);
+
+    //     match (storage_width, width) {
+    //         (Width::W64, Width::W32) => self.module.unary(expr, UnaryOp::WrapInt64),
+    //         (Width::W32, Width::W64) => self.module.unary(expr, UnaryOp::ExtendUInt32),
+    //         (Width::W64, Width::W64) | (Width::W32, Width::W32) => expr,
+    //     }
+    // }
+
+    // pub fn write_register(&self, register: u32, width: Width, value: Expression) -> Expression {
+    //     if self.global.architecture.is_zero_register(register) {
+    //         return self.module.nop();
+    //     }
+
+    //     let storage_width = self.global.architecture.local_width(register);
+
+    //     let value = match (storage_width, width) {
+    //         (Width::W64, Width::W32) => self.module.unary(value, UnaryOp::ExtendUInt32),
+    //         (Width::W32, Width::W64) => self.module.unary(value, UnaryOp::WrapInt64),
+    //         (Width::W64, Width::W64) | (Width::W32, Width::W32) => value,
+    //     };
+
+    //     self.module
+    //         .local_set(self.get_register_local_index(register), value)
+    // }
 }
 
 #[derive(Debug)]
@@ -83,6 +105,15 @@ pub struct GlobalContext {
 }
 
 impl GlobalContext {
+    fn local_type_to_type(&self, local_type: &LocalType) -> Type {
+        match local_type {
+            LocalType::F32 => todo!(),
+            LocalType::F64 => todo!(),
+            LocalType::I32 => self.module.i32(),
+            LocalType::I64 => self.module.i64(),
+        }
+    }
+
     pub fn translate_elf(
         bytes: &[u8],
         architecture: Box<dyn Architecture>,
@@ -147,7 +178,7 @@ impl GlobalContext {
             context.translate_routine(routine, function_name);
         }
 
-        if let Some(entry_routine_index) = context.analysis.entry_routine_index {
+        /* if let Some(entry_routine_index) = context.analysis.entry_routine_index {
             let param_registers = context.architecture.param_registers();
             let stack_pointer_register = context.architecture.stack_pointer_register();
 
@@ -187,7 +218,7 @@ impl GlobalContext {
             );
 
             module.export_function(entry_function_name, "_entry");
-        }
+        } */
 
         Ok(module)
     }
@@ -197,46 +228,50 @@ impl GlobalContext {
 
         // Allocate parameters and locals
 
-        let param_registers = self.architecture.param_registers();
-        let param_count = param_registers.len() as u32;
+        let mut next_local_index = 0;
 
-        let param_types = param_registers
-            .iter()
-            .map(|_| module.i64())
-            .collect::<Vec<_>>();
-
-        let return_type = module.tuple_type(&param_types);
-
-        let mut next_local_index = param_count;
-
-        let mut local_index_by_register = param_registers
-            .iter()
-            .enumerate()
-            .map(|(param_index, register)| {
-                let local_index = param_index as u32;
-                next_local_index = next_local_index.max(local_index + 1);
-                (*register, local_index)
-            })
-            .collect::<HashMap<_, _>>();
-
+        let mut param_types = Vec::new();
         let mut local_types = Vec::new();
 
+        let local_descriptors = self.architecture.locals();
+        let mut local_index_by_external_local_index = HashMap::new();
+
+        for (external_local_index, descriptor) in local_descriptors.iter().enumerate() {
+            if !descriptor.argument {
+                continue;
+            }
+
+            let local_index = next_local_index;
+
+            param_types.push(self.local_type_to_type(&descriptor.type_));
+            next_local_index += 1;
+            local_index_by_external_local_index.insert(external_local_index as u32, local_index);
+        }
+
+        for (external_local_index, descriptor) in local_descriptors.iter().enumerate() {
+            if descriptor.argument {
+                continue;
+            }
+
+            let local_index = next_local_index;
+
+            local_types.push(self.local_type_to_type(&descriptor.type_));
+            next_local_index += 1;
+            local_index_by_external_local_index.insert(external_local_index as u32, local_index);
+        }
+
         let relooper_helper_local_index = next_local_index;
+
         local_types.push(module.i32());
         next_local_index += 1;
 
-        for reg in self.architecture.all_registers() {
-            if !local_index_by_register.contains_key(&reg) {
-                let local_index = next_local_index;
-                next_local_index += 1;
+        let return_types = local_descriptors
+            .iter()
+            .filter(|desc| desc.return_value)
+            .map(|desc| self.local_type_to_type(&desc.type_))
+            .collect::<Vec<_>>();
 
-                local_index_by_register.insert(reg, local_index);
-                local_types.push(match self.architecture.local_width(reg) {
-                    Width::W32 => module.i32(),
-                    Width::W64 => module.i64(),
-                });
-            }
-        }
+        let return_type = module.tuple_type(&return_types);
 
         // Additional locals for temporary values
         let func_return_scratch_local_index = next_local_index;
@@ -257,9 +292,9 @@ impl GlobalContext {
             global: self,
 
             func_return_scratch_local_index,
-            local_index_by_register,
+            local_descriptors,
+            local_index_by_external_local_index,
             module: module.clone(),
-            return_registers: param_registers.clone(),
             svc_return_scratch_local_index,
         };
 
