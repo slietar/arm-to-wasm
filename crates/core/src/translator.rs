@@ -380,7 +380,7 @@ pub fn set_up_memory(
         .iter()
         .enumerate()
         .map(|(i, seg)| MemorySegmentDescriptor {
-            name: format!("segment_{}", i),
+            name: format!("segment_{}", i).into(),
             data: seg.data,
             passive: false,
             offset: module.const_(seg.address),

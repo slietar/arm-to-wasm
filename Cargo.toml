@@ -4,6 +4,7 @@ members = [
     "crates/arm",
     "crates/arm-decoder",
     "crates/core",
+    "crates/riscv",
     "crates/runtime",
 ]
 exclude = [

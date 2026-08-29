@@ -529,7 +529,9 @@ pub fn main_analyze(
     architecture: &dyn Architecture,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let elf_file = ElfFile::minimal_parse(elf_bytes)?;
-    let _analysis = analyze(elf_bytes, &elf_file, architecture)?;
+    let analysis = analyze(elf_bytes, &elf_file, architecture)?;
+
+    eprintln!("Analysis: {:#?}", analysis);
 
     Ok(())
 }
