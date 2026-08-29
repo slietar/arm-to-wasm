@@ -54,6 +54,7 @@ pub struct LocalDescriptor {
     pub argument: bool,
     pub return_value: bool,
     pub type_: LocalType,
+    pub stack_pointer: bool,
 }
 
 pub trait Architecture: std::fmt::Debug + Sized {

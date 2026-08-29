@@ -27,8 +27,8 @@ fn main() -> wasmtime::Result<()> {
 
     let mut linker = Linker::new(&engine);
 
-    linker.func_wrap("ref", "supervisor_call", |mut caller: Caller<'_, ()>, param: i32, x8: i64, x0: i64, x1: i64, x2: i64, x3: i64, x4: i64, x5: i64| -> wasmtime::Result<(i64, i64)> {
-        match x8 {
+    linker.func_wrap("ref", "system_call", |mut caller: Caller<'_, ()>, syscall_number: i64, x0: i64, x1: i64, x2: i64, x3: i64, x4: i64, x5: i64| -> wasmtime::Result<i64> {
+        match syscall_number {
             0x40 => {
                 let fd = x0;
                 let ptr = x1 as u32;
@@ -46,11 +46,11 @@ fn main() -> wasmtime::Result<()> {
                 return Err(ExitError { code: x0 as u32 }.into());
             },
             _ => {
-                eprint!("syscall_handler called with param: {}, x8: {}, x0: {}, x1: {}, x2: {}, x3: {}, x4: {}, x5: {}\n", param, x8, x0, x1, x2, x3, x4, x5);
+                eprint!("syscall_handler called with x8: {}, x0: {}, x1: {}, x2: {}, x3: {}, x4: {}, x5: {}\n", syscall_number, x0, x1, x2, x3, x4, x5);
             }
         }
 
-        Ok((0, 0))
+        Ok(0)
     })?;
 
     let mut store: Store<_> = Store::new(&engine, ());

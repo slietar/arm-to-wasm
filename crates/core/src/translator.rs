@@ -1,7 +1,9 @@
 use std::{collections::HashMap, ffi::CString};
 
 use crate::{
-    analysis::{Analysis, ElfFile, Routine}, architecture::{Architecture, Instr as _, LocalDescriptor, LocalType, Width}, constants::PAGE_SIZE,
+    analysis::{Analysis, ElfFile, Routine},
+    architecture::{Architecture, Instr as _, LocalDescriptor, LocalType, Width},
+    constants::PAGE_SIZE,
 };
 use bnyr::{Expression, MemorySegmentDescriptor, Module, Type, UnaryOp};
 use elf::ElfBytes;
@@ -32,7 +34,8 @@ impl<'a, A: Architecture> RoutineContext<'a, A> {
     pub fn return_(&self) -> Expression {
         self.module.return_(
             self.module.tuple(
-                &self.local_descriptors
+                &self
+                    .local_descriptors
                     .iter()
                     .enumerate()
                     .filter(|(_, desc)| desc.return_value)
@@ -147,19 +150,20 @@ impl<A: Architecture> GlobalContext<A> {
             context.translate_routine(routine, function_name);
         }
 
-        /* if let Some(entry_routine_index) = context.analysis.entry_routine_index {
-            let param_registers = context.architecture.param_registers();
-            let stack_pointer_register = context.architecture.stack_pointer_register();
+        if let Some(entry_routine_index) = context.analysis.entry_routine_index {
+            let local_descriptors = context.architecture.locals();
 
-            let param_types = param_registers
+            let param_types = local_descriptors
                 .iter()
-                .map(|_| module.i64())
+                .filter(|desc| desc.argument)
+                .map(|desc| context.local_type_to_type(&desc.type_))
                 .collect::<Vec<_>>();
 
-            let arg_exprs = param_registers
+            let arg_exprs = local_descriptors
                 .iter()
-                .map(|reg| {
-                    if *reg == stack_pointer_register {
+                .filter(|desc| desc.argument)
+                .map(|desc| {
+                    if desc.stack_pointer {
                         module.const_(memory_info.stack_internal_address as i64)
                     } else {
                         module.const_(0i64)
@@ -187,13 +191,13 @@ impl<A: Architecture> GlobalContext<A> {
             );
 
             module.export_function(entry_function_name, "_entry");
-        } */
-
-       // Export all routines
-        for (routine_index, routine) in context.analysis.routines.iter().enumerate() {
-            let function_name = &context.function_names[routine_index];
-            module.export_function(function_name, function_name);
         }
+
+        // Export all routines
+        // for (routine_index, routine) in context.analysis.routines.iter().enumerate() {
+        //     let function_name = &context.function_names[routine_index];
+        //     module.export_function(function_name, function_name);
+        // }
 
         Ok(module)
     }

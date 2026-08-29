@@ -7,7 +7,13 @@ use crate::instruction::RiscVInstruction;
 type RegisterType = usize;
 
 /// Zero register (`x0`).
-pub const ZERO: u32 = 0;
+pub const ZERO: RegisterType = 0;
+
+/// Return-address register (`ra` / `x1`).
+pub const RA: RegisterType = 1;
+
+/// Stack pointer register (`sp` / `x2`).
+pub const SP: RegisterType = 2;
 
 pub const A0: RegisterType = 10;
 pub const A1: RegisterType = 11;
@@ -16,6 +22,7 @@ pub const A3: RegisterType = 13;
 pub const A4: RegisterType = 14;
 pub const A5: RegisterType = 15;
 pub const A6: RegisterType = 16;
+pub const A7: RegisterType = 17;
 
 #[derive(Debug)]
 pub struct RiscV;
@@ -70,7 +77,7 @@ impl Architecture for RiscV {
         ctx.module.import_function(
             self.ecall_name(),
             "ref",
-            "supervisor_call",
+            "system_call",
             &[
                 ctx.module.i64(),
                 ctx.module.i64(),
@@ -93,186 +100,217 @@ impl Architecture for RiscV {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x2 (sp)
             LocalDescriptor {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: true,
             },
             // x3 (gp)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x4 (tp)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x5 (t0)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x6 (t1)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x7 (t2)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x8 (s0/fp)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x9 (s1)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x10 (a0)
             LocalDescriptor {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x11 (a1)
             LocalDescriptor {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x12 (a2)
             LocalDescriptor {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x13 (a3)
             LocalDescriptor {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x14 (a4)
             LocalDescriptor {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x15 (a5)
             LocalDescriptor {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x16 (a6)
             LocalDescriptor {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x17 (a7)
             LocalDescriptor {
                 argument: true,
                 return_value: true,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x18 (s2)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x19 (s3)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x20 (s4)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x21 (s5)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x22 (s6)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x23 (s7)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x24 (s8)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x25 (s9)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x26 (s10)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x27 (s11)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x28 (t3)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x29 (t4)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x30 (t5)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
             // x31 (t6)
             LocalDescriptor {
                 argument: false,
                 return_value: false,
                 type_: LocalType::I64,
+                stack_pointer: false,
             },
         ]
     }
@@ -294,6 +332,6 @@ impl Architecture for RiscV {
     }
 
     fn is_zero_register(&self, register: u32) -> bool {
-        register == ZERO
+        todo!()
     }
 }

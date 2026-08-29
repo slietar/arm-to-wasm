@@ -3,15 +3,8 @@ use aw_core::translator::RoutineContext;
 use bnyr::{BinaryOp, Expression, LoadVariant, StoreVariant};
 use raki::{BaseIOpcode, COpcode, Instruction, OpcodeKind};
 
-use crate::arch::{A0, RiscV};
+use crate::arch::RiscV;
 use crate::simplify_instruction::expand_compressed;
-
-/// Return-address register (`ra` / `x1`).
-const RA: usize = 1;
-/// Zero register (`x0`).
-const ZERO: usize = 0;
-/// Stack pointer register (`sp` / `x2`).
-const SP: usize = 2;
 
 #[derive(Debug)]
 pub struct RiscVInstruction(pub Instruction);
@@ -22,7 +15,7 @@ fn register_to_local_index(register: usize) -> u32 {
 
 impl RiscVInstruction {
     fn read_register(&self, ctx: &RoutineContext<RiscV>, register: usize) -> Expression {
-        if register == ZERO {
+        if register == crate::arch::ZERO {
             ctx.module.const_(0i64)
         } else {
             ctx.read_local(register_to_local_index(register))
@@ -35,7 +28,7 @@ impl RiscVInstruction {
         register: usize,
         value: Expression,
     ) -> Expression {
-        if register == ZERO {
+        if register == crate::arch::ZERO {
             ctx.module.nop()
         } else {
             ctx.write_local(register_to_local_index(register), value)
@@ -58,6 +51,15 @@ impl Instr<RiscV> for RiscVInstruction {
         let instr = uncompressed_instr.as_ref().unwrap_or(&self.0);
 
         match &instr.opc {
+            OpcodeKind::BaseI(BaseIOpcode::ADD) => block_exprs.push(self.write_register(
+                ctx,
+                instr.rd.unwrap(),
+                ctx.module.binary(
+                    self.read_register(ctx, instr.rs1.unwrap()),
+                    self.read_register(ctx, instr.rs2.unwrap()),
+                    BinaryOp::AddInt64,
+                ),
+            )),
             OpcodeKind::BaseI(BaseIOpcode::ADDI) => block_exprs.push(self.write_register(
                 ctx,
                 instr.rd.unwrap(),
@@ -95,33 +97,33 @@ impl Instr<RiscV> for RiscVInstruction {
                 &ctx.global.memory_name,
             )),
             OpcodeKind::BaseI(BaseIOpcode::JALR)
-                if instr.rd == Some(ZERO) && instr.rs1 == Some(RA) && instr.imm == Some(0) =>
+                if instr.rd == Some(crate::arch::ZERO)
+                    && instr.rs1 == Some(crate::arch::RA)
+                    && instr.imm == Some(0) =>
             {
                 block_exprs.push(ctx.return_());
-            },
+            }
 
             OpcodeKind::BaseI(BaseIOpcode::ECALL) => {
                 let syscall_name = "environment_call";
 
-                block_exprs.push(
-                    self.write_register(
-                        ctx,
-                        crate::arch::A0,
-                        ctx.module.call(
-                            syscall_name,
-                            &[
-                                self.read_register(ctx, crate::arch::A0),
-                                self.read_register(ctx, crate::arch::A1),
-                                self.read_register(ctx, crate::arch::A2),
-                                self.read_register(ctx, crate::arch::A3),
-                                self.read_register(ctx, crate::arch::A4),
-                                self.read_register(ctx, crate::arch::A5),
-                                self.read_register(ctx, crate::arch::A6),
-                            ],
-                            ctx.module.i64(),
-                        )
-                    )
-                );
+                block_exprs.push(self.write_register(
+                    ctx,
+                    crate::arch::A0,
+                    ctx.module.call(
+                        syscall_name,
+                        &[
+                            self.read_register(ctx, crate::arch::A7),
+                            self.read_register(ctx, crate::arch::A0),
+                            self.read_register(ctx, crate::arch::A1),
+                            self.read_register(ctx, crate::arch::A2),
+                            self.read_register(ctx, crate::arch::A3),
+                            self.read_register(ctx, crate::arch::A4),
+                            self.read_register(ctx, crate::arch::A5),
+                        ],
+                        ctx.module.i64(),
+                    ),
+                ));
             }
 
             _ => {
@@ -164,7 +166,7 @@ impl Instr<RiscV> for RiscVInstruction {
             // JAL saves the return address in `rd`. If `rd` is zero, the return
             // address is discarded.
             OpcodeKind::BaseI(BaseIOpcode::JAL) => match instruction.rd.unwrap() {
-                ZERO => BranchKind::Jump {
+                crate::arch::ZERO => BranchKind::Jump {
                     conditional: false,
                     target_address: address + (instruction.imm.unwrap() as u64),
                 },
@@ -178,13 +180,15 @@ impl Instr<RiscV> for RiscVInstruction {
 
             // JALR and JR are used for returns
             OpcodeKind::BaseI(BaseIOpcode::JALR)
-                if matches!(instruction.rd, Some(ZERO) | None)
-                    && instruction.rs1 == Some(RA)
+                if matches!(instruction.rd, Some(crate::arch::ZERO) | None)
+                    && instruction.rs1 == Some(crate::arch::RA)
                     && instruction.imm == Some(0) =>
             {
                 BranchKind::Return
             }
-            OpcodeKind::C(COpcode::JR) if instruction.rs1 == Some(RA) => BranchKind::Return,
+            OpcodeKind::C(COpcode::JR) if instruction.rs1 == Some(crate::arch::RA) => {
+                BranchKind::Return
+            }
 
             _ => BranchKind::None,
         }
