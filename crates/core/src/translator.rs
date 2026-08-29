@@ -33,8 +33,7 @@ impl RoutineContext<'_> {
     }
 
     pub fn return_(&self) -> Expression {
-        self.write_local(
-            self.func_return_scratch_local_index,
+        self.module.return_(
             self.module.tuple(
                 &self.local_descriptors
                     .iter()
@@ -43,10 +42,7 @@ impl RoutineContext<'_> {
                     .map(|(i, _)| self.read_local(i as u32))
                     .collect::<Vec<_>>(),
             ),
-        );
-
-        self.module
-            .return_(self.read_local(self.func_return_scratch_local_index))
+        )
     }
 
     // pub fn read_register(&self, register: u32, width: Width) -> Expression {
@@ -219,6 +215,12 @@ impl GlobalContext {
 
             module.export_function(entry_function_name, "_entry");
         } */
+
+       // Export all routines
+        for (routine_index, routine) in context.analysis.routines.iter().enumerate() {
+            let function_name = &context.function_names[routine_index];
+            module.export_function(function_name, function_name);
+        }
 
         Ok(module)
     }
