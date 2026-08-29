@@ -1,4 +1,4 @@
-use aw_core::architecture::{Architecture, Instr, LocalDescriptor, LocalType, Width};
+use aw_core::architecture::{Architecture, LocalDescriptor, LocalType, Width};
 use raki::{Decode, Isa};
 
 use crate::instruction::RiscVInstruction;
@@ -16,13 +16,15 @@ const ZERO: u32 = 0;
 pub struct RiscV;
 
 impl Architecture for RiscV {
+    type InstrType = RiscVInstruction;
+
     fn instruction_size(&self) -> u64 {
         // Halfword-granular: see the `RiscVInstruction` doc comment.
         2
     }
 
-    fn decode_instructions(&self, bytes: &[u8]) -> Vec<Box<dyn Instr>> {
-        let mut instructions: Vec<Box<dyn Instr>> = Vec::with_capacity(bytes.len() / 2);
+    fn decode_instructions(&self, bytes: &[u8]) -> Vec<RiscVInstruction> {
+        let mut instructions = Vec::with_capacity(bytes.len() / 2);
         let mut offset = 0;
 
         while offset + 2 <= bytes.len() {
@@ -36,7 +38,7 @@ impl Architecture for RiscV {
                     .decode(Isa::Rv64)
                     .expect("Failed to decode RISC-V instruction");
 
-                instructions.push(Box::new(RiscVInstruction(instruction)));
+                instructions.push(RiscVInstruction(instruction));
 
                 offset += 4;
             } else {
@@ -44,7 +46,7 @@ impl Architecture for RiscV {
                     .decode(Isa::Rv64)
                     .expect("Failed to decode RISC-V instruction");
 
-                instructions.push(Box::new(RiscVInstruction(instruction)));
+                instructions.push(RiscVInstruction(instruction));
 
                 offset += 2;
             }

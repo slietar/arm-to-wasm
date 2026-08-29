@@ -3,37 +3,37 @@ use std::hash::Hash;
 
 use elf::ElfBytes;
 
-use crate::architecture::{Architecture, BranchKind};
+use crate::architecture::{Architecture, BranchKind, Instr};
 
 pub type ElfFile<'a> = ElfBytes<'a, elf::endian::AnyEndian>;
 
 #[derive(Debug)]
-pub struct Routine {
+pub struct Routine<A: Architecture> {
     pub address: u64,
-    pub blocks: Vec<Block>,
+    pub blocks: Vec<Block<A>>,
     pub name: Option<String>,
     pub stack_size: Option<u64>,
     pub variables: HashMap<i32, u32>,
 }
 
 #[derive(Debug)]
-pub struct Analysis {
+pub struct Analysis<A: Architecture> {
     pub entry_routine_index: Option<usize>,
-    pub routines: Vec<Routine>,
+    pub routines: Vec<Routine<A>>,
 }
 
 #[derive(Debug)]
-struct ExecutableSegment {
+struct ExecutableSegment<A: Architecture> {
     pub address: u64,
-    pub instructions: Vec<Box<dyn crate::architecture::Instr>>,
+    pub instructions: Vec<A::InstrType>,
     pub source_offset: u64,
     pub size: u64,
 }
 
 #[derive(Debug)]
-pub struct Block {
+pub struct Block<A: Architecture> {
     pub fallthrough_block_index: Option<usize>,
-    pub instructions: Vec<Box<dyn crate::architecture::Instr>>,
+    pub instructions: Vec<A::InstrType>,
     pub jump_block_index: Option<usize>,
     pub start_address: u64,
 
@@ -59,11 +59,11 @@ struct StackAccess {
     write: bool,
 }
 
-pub fn analyze(
+pub fn analyze<A: Architecture>(
     elf_bytes: &[u8],
-    elf_file: &ElfFile,
-    architecture: &dyn Architecture,
-) -> Result<Analysis, Box<dyn std::error::Error>> {
+    elf_file: &ElfFile<'_>,
+    architecture: &A,
+) -> Result<Analysis<A>, Box<dyn std::error::Error>> {
     let stack_pointer = architecture.stack_pointer_register();
 
     let (section_headers_opt, section_name_table_opt) = elf_file.section_headers_with_strtab()?;
@@ -109,7 +109,7 @@ pub fn analyze(
         let _instructions = architecture.decode_instructions(section_data);
     }
 
-    let executable_segments: Vec<_> = elf_file
+    let executable_segments: Vec<ExecutableSegment<A>> = elf_file
         .segments()
         .unwrap()
         .iter()
@@ -463,7 +463,7 @@ pub fn analyze(
             let block = &blocks[block_index];
 
             for instruction in &block.instructions {
-                walker.process(instruction.as_ref());
+                walker.process::<A>(instruction);
             }
 
             let mut inserted = false;
@@ -518,9 +518,9 @@ pub fn analyze(
     })
 }
 
-pub fn main_analyze(
+pub fn main_analyze<A: Architecture>(
     elf_bytes: &[u8],
-    architecture: &dyn Architecture,
+    architecture: &A,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let elf_file = ElfFile::minimal_parse(elf_bytes)?;
     let analysis = analyze(elf_bytes, &elf_file, architecture)?;
@@ -560,7 +560,7 @@ impl RegisterReadWalker {
             })
     }
 
-    fn process(&mut self, instruction: &dyn crate::architecture::Instr) {
+    fn process<A: Architecture>(&mut self, instruction: &A::InstrType) {
         self.registers_read.extend(
             instruction
                 .registers_read()

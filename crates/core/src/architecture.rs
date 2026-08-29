@@ -24,11 +24,11 @@ pub struct StackAccess {
     pub write: bool,
 }
 
-pub trait Instr: std::fmt::Debug {
+pub trait Instr<A: Architecture>: std::fmt::Debug {
     fn size(&self) -> u64;
 
-    fn translate(&self, ctx: &RoutineContext, current_address: u64, block_exprs: &mut Vec<Expression>);
-    fn branch_condition(&self, ctx: &RoutineContext) -> Option<Expression>;
+    fn translate(&self, ctx: &RoutineContext<A>, current_address: u64, block_exprs: &mut Vec<Expression>);
+    fn branch_condition(&self, ctx: &RoutineContext<A>) -> Option<Expression>;
 
     // Used only by the generic CFG-building analysis.
     fn branch_kind(&self, address: u64) -> BranchKind;
@@ -56,9 +56,11 @@ pub struct LocalDescriptor {
     pub type_: LocalType,
 }
 
-pub trait Architecture: std::fmt::Debug {
+pub trait Architecture: std::fmt::Debug + Sized {
+    type InstrType: Instr<Self>;
+
     fn instruction_size(&self) -> u64;
-    fn decode_instructions(&self, bytes: &[u8]) -> Vec<Box<dyn Instr>>;
+    fn decode_instructions(&self, bytes: &[u8]) -> Vec<Self::InstrType>;
 
     fn locals(&self) -> Vec<LocalDescriptor>;
 

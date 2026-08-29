@@ -1,16 +1,14 @@
 use std::{collections::HashMap, ffi::CString};
 
 use crate::{
-    analysis::{Analysis, ElfFile, Routine},
-    architecture::{Architecture, LocalDescriptor, LocalType, Width},
-    constants::PAGE_SIZE,
+    analysis::{Analysis, ElfFile, Routine}, architecture::{Architecture, Instr as _, LocalDescriptor, LocalType, Width}, constants::PAGE_SIZE,
 };
 use bnyr::{Expression, MemorySegmentDescriptor, Module, Type, UnaryOp};
 use elf::ElfBytes;
 
 #[derive(Debug)]
-pub struct RoutineContext<'a> {
-    pub global: &'a GlobalContext,
+pub struct RoutineContext<'a, A: Architecture> {
+    pub global: &'a GlobalContext<A>,
 
     local_descriptors: Vec<LocalDescriptor>,
     local_index_by_external_local_index: HashMap<u32, u32>,
@@ -19,7 +17,7 @@ pub struct RoutineContext<'a> {
     pub svc_return_scratch_local_index: u32,
 }
 
-impl RoutineContext<'_> {
+impl<'a, A: Architecture> RoutineContext<'a, A> {
     pub fn read_local(&self, local_index: u32) -> Expression {
         let descriptor = &self.local_descriptors[local_index as usize];
         let local_type = self.global.local_type_to_type(&descriptor.type_);
@@ -89,18 +87,18 @@ impl RoutineContext<'_> {
 }
 
 #[derive(Debug)]
-pub struct GlobalContext {
+pub struct GlobalContext<A: Architecture> {
     module: Module,
 
-    pub analysis: Analysis,
-    pub architecture: Box<dyn Architecture>,
+    pub analysis: Analysis<A>,
+    pub architecture: Box<A>,
     pub function_names: Vec<String>,
     pub memory_name: CString,
     pub svc_function_name: String,
     pub svc_return_type: Type,
 }
 
-impl GlobalContext {
+impl<A: Architecture> GlobalContext<A> {
     fn local_type_to_type(&self, local_type: &LocalType) -> Type {
         match local_type {
             LocalType::F32 => todo!(),
@@ -112,7 +110,7 @@ impl GlobalContext {
 
     pub fn translate_elf(
         bytes: &[u8],
-        architecture: Box<dyn Architecture>,
+        architecture: Box<A>,
     ) -> Result<Module, Box<dyn std::error::Error>> {
         // TODO: Avoid redundancy
         let elf_file = ElfFile::minimal_parse(bytes)?;
@@ -225,7 +223,7 @@ impl GlobalContext {
         Ok(module)
     }
 
-    pub fn translate_routine(&self, routine: &Routine, function_name: &str) {
+    pub fn translate_routine(&self, routine: &Routine<A>, function_name: &str) {
         let module = &self.module;
 
         // Allocate parameters and locals

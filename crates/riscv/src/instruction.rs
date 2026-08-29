@@ -3,6 +3,7 @@ use aw_core::translator::RoutineContext;
 use bnyr::{BinaryOp, Expression, LoadVariant, StoreVariant};
 use raki::{BaseIOpcode, COpcode, Instruction, OpcodeKind};
 
+use crate::arch::RiscV;
 use crate::simplify_instruction::expand_compressed;
 
 /// Return-address register (`ra` / `x1`).
@@ -20,7 +21,7 @@ fn register_to_local_index(register: usize) -> u32 {
 }
 
 impl RiscVInstruction {
-    fn read_register(&self, ctx: &RoutineContext, register: usize) -> Expression {
+    fn read_register(&self, ctx: &RoutineContext<RiscV>, register: usize) -> Expression {
         if register == ZERO {
             ctx.module.const_(0i64)
         } else {
@@ -30,7 +31,7 @@ impl RiscVInstruction {
 
     fn write_register(
         &self,
-        ctx: &RoutineContext,
+        ctx: &RoutineContext<RiscV>,
         register: usize,
         value: Expression,
     ) -> Expression {
@@ -42,14 +43,14 @@ impl RiscVInstruction {
     }
 }
 
-impl Instr for RiscVInstruction {
+impl Instr<RiscV> for RiscVInstruction {
     fn size(&self) -> u64 {
         if self.0.is_compressed { 2 } else { 4 }
     }
 
     fn translate(
         &self,
-        ctx: &RoutineContext,
+        ctx: &RoutineContext<RiscV>,
         _current_address: u64,
         block_exprs: &mut Vec<Expression>,
     ) {
@@ -105,7 +106,7 @@ impl Instr for RiscVInstruction {
         }
     }
 
-    fn branch_condition(&self, _ctx: &RoutineContext) -> Option<Expression> {
+    fn branch_condition(&self, _ctx: &RoutineContext<RiscV>) -> Option<Expression> {
         // todo!("RISC-V branch conditions are not implemented yet")
         // eprintln!("Unimplemented RISC-V branch condition: {:?}", self.0);
 
