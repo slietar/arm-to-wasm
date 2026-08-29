@@ -9,6 +9,7 @@ pub extern "C" fn _start() {
     exit(3);
 }
 
+#[inline(never)]
 fn exit(code: i32) /* -> ! */ {
     unsafe {
         asm!(

@@ -11,9 +11,10 @@ pub enum Width {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BranchKind {
     None,
-    Call,
+    Call { target_address: u64 },
     Jump { conditional: bool, target_address: u64 },
     Return,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +32,7 @@ pub trait Instr<A: Architecture>: std::fmt::Debug {
     fn branch_condition(&self, ctx: &RoutineContext<A>) -> Option<Expression>;
 
     // Used only by the generic CFG-building analysis.
-    fn branch_kind(&self, address: u64) -> BranchKind;
+    fn branch_kind(&self, address: u64, prev_instruction: Option<&Self>) -> BranchKind;
 
     /// `(new_frame_size_if_this_instruction_establishes_one, memory_accesses_relative_to_stack_pointer)`.
     /// Purely descriptive - the caller decides whether it's actually in a prologue.

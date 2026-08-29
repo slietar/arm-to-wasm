@@ -170,13 +170,15 @@ pub fn analyze<A: Architecture>(
         // TODO: Improve instruction index lookup
         let routine_first_instruction_index = {
             let mut p = segment.address;
-            segment.instructions
+            segment
+                .instructions
                 .iter()
                 .position(|instruction| {
                     let instruction_size = instruction.size();
                     let instruction_end = p + instruction_size;
 
-                    let is_first_instruction = current_address >= p && current_address < instruction_end;
+                    let is_first_instruction =
+                        current_address >= p && current_address < instruction_end;
 
                     p = instruction_end;
 
@@ -185,7 +187,11 @@ pub fn analyze<A: Architecture>(
                 .unwrap()
         };
 
-        for instruction in &segment.instructions[routine_first_instruction_index..] {
+        for (instruction_index, instruction) in segment.instructions
+            [routine_first_instruction_index..]
+            .iter()
+            .enumerate()
+        {
             // Catches branches [to a function that makes no calls or] to a function that never returns
             if (current_address < routine_address) || (current_address >= routine_end_address) {
                 eprintln!("Unexpected stopping at address {:#x}", current_address,);
@@ -194,11 +200,17 @@ pub fn analyze<A: Architecture>(
 
             let next_address = current_address + instruction.size();
 
-            let branch_kind = instruction.branch_kind(current_address);
+            let branch_kind = instruction.branch_kind(
+                current_address,
+                (instruction_index > 0).then(|| {
+                    &segment.instructions[routine_first_instruction_index + instruction_index - 1]
+                }),
+            );
+
             let (allocate, accesses) = instruction.stack_frame_effect();
 
             // eprintln!("{:#x}: {:?}", current_address, instruction);
-            // eprintln!("  Branch kind: {:x?}", branch_kind);
+            eprintln!("  Branch kind: {:x?}", branch_kind);
 
             if let Some(size) = allocate
                 && stack_entry_size.is_none()
@@ -224,10 +236,10 @@ pub fn analyze<A: Architecture>(
             match branch_kind {
                 BranchKind::Jump {
                     conditional,
-                    target_address
+                    target_address,
                 } => {
-                    let external_jump = target_address < routine_address
-                        || target_address >= routine_end_address;
+                    let external_jump =
+                        target_address < routine_address || target_address >= routine_end_address;
                     let external_called_routine_index = external_jump
                         .then(|| {
                             routine_addresses_and_names_sorted
@@ -258,7 +270,7 @@ pub fn analyze<A: Architecture>(
                         break;
                     }
                 }
-                BranchKind::Call => {
+                BranchKind::Call { target_address } => {
                     is_prologue = false;
                 }
                 BranchKind::Return => {
@@ -267,6 +279,9 @@ pub fn analyze<A: Architecture>(
                     break;
                 }
                 BranchKind::None => {}
+                BranchKind::Unknown => {
+                    eprintln!("Unknown branch kind at address {:#x}", current_address);
+                }
             }
 
             current_address = next_address;
@@ -274,7 +289,7 @@ pub fn analyze<A: Architecture>(
 
         let _ = is_prologue;
 
-        // eprintln!("Jumps: {:#x?}", jumps);
+        eprintln!("Jumps: {:#x?}", jumps);
 
         // Block analysis
 
@@ -311,10 +326,7 @@ pub fn analyze<A: Architecture>(
                     .flat_map(|jump| {
                         [
                             // The block ends after a branch instruction
-                            (
-                                jump.next_address,
-                                BlockEndKind::JumpSource(jump.clone()),
-                            ),
+                            (jump.next_address, BlockEndKind::JumpSource(jump.clone())),
                             // The block ends just before a branch instruction
                             (jump.target_address, BlockEndKind::JumpTarget),
                         ]
@@ -523,7 +535,7 @@ pub fn main_analyze<A: Architecture>(
     let elf_file = ElfFile::minimal_parse(elf_bytes)?;
     let analysis = analyze(elf_bytes, &elf_file, architecture)?;
 
-    eprintln!("Analysis: {:#?}", analysis);
+    // eprintln!("Analysis: {:#?}", analysis);
 
     Ok(())
 }

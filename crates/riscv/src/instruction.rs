@@ -1,7 +1,7 @@
 use aw_core::architecture::{BranchKind, Instr, StackAccess};
 use aw_core::translator::RoutineContext;
 use bnyr::{BinaryOp, Expression, LoadVariant, StoreVariant};
-use raki::{BaseIOpcode, COpcode, Instruction, OpcodeKind};
+use raki::{BaseIOpcode, Instruction, OpcodeKind};
 
 use crate::arch::RiscV;
 use crate::simplify_instruction::expand_compressed;
@@ -146,8 +146,11 @@ impl Instr<RiscV> for RiscVInstruction {
         }
     }
 
-    fn branch_kind(&self, address: u64) -> BranchKind {
-        let instruction = &self.0;
+    fn branch_kind(&self, address: u64, prev_instruction: Option<&Self>) -> BranchKind {
+        let expanded = expand_compressed(&self.0);
+        let instruction = expanded.as_ref().unwrap_or(&self.0);
+
+        eprintln!("Instruction: {:?}", instruction);
 
         match &instruction.opc {
             OpcodeKind::BaseI(
@@ -157,8 +160,7 @@ impl Instr<RiscV> for RiscVInstruction {
                 | BaseIOpcode::BGE
                 | BaseIOpcode::BLTU
                 | BaseIOpcode::BGEU,
-            )
-            | OpcodeKind::C(COpcode::BEQZ | COpcode::BNEZ) => BranchKind::Jump {
+            ) => BranchKind::Jump {
                 conditional: true,
                 target_address: address + (instruction.imm.unwrap() as u64),
             },
@@ -170,24 +172,56 @@ impl Instr<RiscV> for RiscVInstruction {
                     conditional: false,
                     target_address: address + (instruction.imm.unwrap() as u64),
                 },
-                _ => BranchKind::Call,
+                crate::arch::RA => {
+                    // The return address is expected to be `ra`.
+                    BranchKind::Call {
+                        target_address: address + (instruction.imm.unwrap() as u64),
+                    }
+                }
+                _ => BranchKind::Unknown,
             },
-            OpcodeKind::C(COpcode::J) => BranchKind::Jump {
-                conditional: false,
-                target_address: address + (instruction.imm.unwrap() as u64),
-            },
-            OpcodeKind::C(COpcode::JAL) => BranchKind::Call,
 
-            // JALR and JR are used for returns
-            OpcodeKind::BaseI(BaseIOpcode::JALR)
-                if matches!(instruction.rd, Some(crate::arch::ZERO) | None)
-                    && instruction.rs1 == Some(crate::arch::RA)
-                    && instruction.imm == Some(0) =>
-            {
-                BranchKind::Return
-            }
-            OpcodeKind::C(COpcode::JR) if instruction.rs1 == Some(crate::arch::RA) => {
-                BranchKind::Return
+            OpcodeKind::BaseI(BaseIOpcode::JALR) => {
+                let return_address_register = instruction.rd.unwrap();
+                let target_address_register = instruction.rs1.unwrap();
+
+                if (return_address_register != crate::arch::RA)
+                    && (return_address_register != crate::arch::ZERO)
+                {
+                    return BranchKind::Unknown;
+                }
+
+                if let Some(
+                    prev_instruction @ RiscVInstruction(Instruction {
+                        opc: OpcodeKind::BaseI(BaseIOpcode::AUIPC),
+                        rd: Some(prev_rd),
+                        ..
+                    }),
+                ) = prev_instruction
+                    && (*prev_rd == target_address_register)
+                {
+                    let target_address = (((address - (prev_instruction.size())) as i64)
+                        + (instruction.imm.unwrap() as i64))
+                        as u64;
+
+                    eprintln!("Computed target address: {:#x}", target_address);
+
+                    match return_address_register {
+                        crate::arch::RA => BranchKind::Call { target_address },
+                        crate::arch::ZERO => BranchKind::Jump {
+                            conditional: false,
+                            target_address,
+                        },
+                        _ => unreachable!(),
+                    }
+                } else if (return_address_register == crate::arch::ZERO)
+                    && (target_address_register == crate::arch::RA)
+                    && (instruction.imm.unwrap() == 0)
+                {
+                    BranchKind::Return
+                } else {
+                    BranchKind::Unknown
+                }
             }
 
             _ => BranchKind::None,
