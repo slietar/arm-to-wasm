@@ -33,7 +33,6 @@ struct ExecutableSegment {
 #[derive(Debug)]
 pub struct Block {
     pub fallthrough_block_index: Option<usize>,
-    pub instruction_count: u64,
     pub instructions: Vec<Box<dyn crate::architecture::Instr>>,
     pub jump_block_index: Option<usize>,
     pub start_address: u64,
@@ -45,6 +44,7 @@ pub struct Block {
 #[derive(Debug, Clone)]
 struct Jump {
     conditional: bool,
+    next_address: u64,
     source_address: u64,
     tail_call_routine_index: Option<usize>,
     target_address: u64,
@@ -64,7 +64,6 @@ pub fn analyze(
     elf_file: &ElfFile,
     architecture: &dyn Architecture,
 ) -> Result<Analysis, Box<dyn std::error::Error>> {
-    let instruction_size = architecture.instruction_size();
     let stack_pointer = architecture.stack_pointer_register();
 
     let (section_headers_opt, section_name_table_opt) = elf_file.section_headers_with_strtab()?;
@@ -159,123 +158,125 @@ pub fn analyze(
             .unwrap_or(u64::MAX)
             .min(segment.address + segment.size);
 
-        let mut handled_addresses = HashSet::new();
-        let mut queue = vec![routine_address];
         let mut jumps = Vec::new();
-
         let mut stack_entry_size = None;
 
         // Prologue = no branching instruction yet
         let mut is_prologue = true;
 
         let mut stack_accesses = Vec::<StackAccess>::new();
-        let mut explicit_return_addresses = HashSet::<u64>::new();
+        let mut explicit_returned_addresses = HashSet::<u64>::new();
 
-        while !queue.is_empty() {
-            let branch_address = queue.pop().unwrap();
+        let mut current_address = routine_address;
 
-            if handled_addresses.contains(&branch_address) {
-                continue;
+        // TODO: Improve instruction index lookup
+        let routine_first_instruction_index = {
+            let mut p = segment.address;
+            segment.instructions
+                .iter()
+                .position(|instruction| {
+                    let instruction_size = instruction.size();
+                    let instruction_end = p + instruction_size;
+
+                    let is_first_instruction = current_address >= p && current_address < instruction_end;
+
+                    p = instruction_end;
+
+                    is_first_instruction
+                })
+                .unwrap()
+        };
+
+        for instruction in &segment.instructions[routine_first_instruction_index..] {
+            // Catches branches [to a function that makes no calls or] to a function that never returns
+            if (current_address < routine_address) || (current_address >= routine_end_address) {
+                eprintln!("Unexpected stopping at address {:#x}", current_address,);
+                break;
             }
 
-            let branch_instructions = &segment.instructions
-                [(((branch_address - segment.address) / instruction_size) as usize)..];
+            let next_address = current_address + instruction.size();
 
-            for (instruction_index, instruction) in branch_instructions.iter().enumerate() {
-                let current_address =
-                    branch_address + (instruction_index as u64) * instruction_size;
+            let branch_kind = instruction.branch_kind(current_address);
+            let (allocate, accesses) = instruction.stack_frame_effect(stack_pointer);
 
-                if handled_addresses.contains(&current_address) {
-                    break;
+            // eprintln!("{:#x}: {:?}", current_address, instruction);
+            // eprintln!("  Branch kind: {:x?}", branch_kind);
+
+            if let Some(size) = allocate
+                && stack_entry_size.is_none()
+                && is_prologue
+            {
+                stack_entry_size = Some(size);
+            }
+
+            if !accesses.is_empty() {
+                for access in accesses {
+                    stack_accesses.push(StackAccess {
+                        address: current_address,
+                        offset: access.offset,
+                        size_bytes: access.size_bytes,
+                        read: access.read,
+                        write: access.write,
+                    });
                 }
 
-                // Catches branches [to a function that makes no calls or] to a function that never returns
-                if (current_address < routine_address) || (current_address >= routine_end_address) {
-                    eprintln!("Unexpected stopping at address {:#x}", current_address,);
-                    break;
-                }
+                is_prologue = false;
+            }
 
-                handled_addresses.insert(current_address);
+            match branch_kind {
+                BranchKind::Jump {
+                    conditional,
+                    target_address
+                } => {
+                    let external_jump = target_address < routine_address
+                        || target_address >= routine_end_address;
+                    let external_called_routine_index = external_jump
+                        .then(|| {
+                            routine_addresses_and_names_sorted
+                                .iter()
+                                .position(|(addr, _)| *addr == target_address)
+                        })
+                        .flatten();
 
-                let branch_kind = instruction.branch_kind();
-                let (allocate, accesses) = instruction.stack_frame_effect(stack_pointer);
-
-                if let Some(size) = allocate
-                    && stack_entry_size.is_none()
-                    && is_prologue
-                {
-                    stack_entry_size = Some(size);
-                }
-
-                if !accesses.is_empty() {
-                    for access in accesses {
-                        stack_accesses.push(StackAccess {
-                            address: current_address,
-                            offset: access.offset,
-                            size_bytes: access.size_bytes,
-                            read: access.read,
-                            write: access.write,
-                        });
+                    if external_jump && external_called_routine_index.is_none() {
+                        eprintln!("Current address: {:#x}", current_address);
+                        eprintln!("Target address: {:#x}", target_address);
+                        eprintln!("Routine address: {:#x}", routine_address);
+                        eprintln!("Routine end address: {:#x}", routine_end_address);
+                        panic!();
                     }
+
+                    jumps.push(Jump {
+                        conditional,
+                        next_address,
+                        tail_call_routine_index: external_called_routine_index,
+                        target_address,
+                        source_address: current_address,
+                    });
 
                     is_prologue = false;
-                }
 
-                match branch_kind {
-                    BranchKind::Jump {
-                        conditional,
-                        target_offset,
-                    } => {
-                        let target_address = ((current_address as i64)
-                            + target_offset * (instruction_size as i64))
-                            as u64;
-                        let external_jump = target_address < routine_address
-                            || target_address >= routine_end_address;
-                        let external_called_routine_index = external_jump
-                            .then(|| {
-                                routine_addresses_and_names_sorted
-                                    .iter()
-                                    .position(|(addr, _)| *addr == target_address)
-                            })
-                            .flatten();
-
-                        if external_jump && external_called_routine_index.is_none() {
-                            eprintln!("Current address: {:#x}", current_address);
-                            eprintln!("Target address: {:#x}", target_address);
-                            eprintln!("Routine address: {:#x}", routine_address);
-                            eprintln!("Routine end address: {:#x}", routine_end_address);
-                            panic!();
-                        }
-
-                        if external_called_routine_index.is_none() {
-                            queue.push(target_address);
-                        }
-
-                        jumps.push(Jump {
-                            conditional,
-                            tail_call_routine_index: external_called_routine_index,
-                            target_address,
-                            source_address: current_address,
-                        });
-
-                        is_prologue = false;
-
-                        if !conditional {
-                            break;
-                        }
-                    }
-                    BranchKind::Call => {
-                        is_prologue = false;
-                    }
-                    BranchKind::Return => {
-                        is_prologue = false;
-                        explicit_return_addresses.insert(current_address);
+                    if !conditional {
                         break;
                     }
-                    BranchKind::None => {}
                 }
+                BranchKind::Call => {
+                    is_prologue = false;
+                }
+                BranchKind::Return => {
+                    is_prologue = false;
+                    explicit_returned_addresses.insert(next_address);
+                    break;
+                }
+                BranchKind::None => {}
             }
+
+            current_address = next_address;
         }
+
+        let _ = is_prologue;
+
+        // eprintln!("Jumps: {:#x?}", jumps);
 
         // Block analysis
 
@@ -288,7 +289,7 @@ pub fn analyze(
                 jumps
                     .iter()
                     .filter(|jump| jump.conditional)
-                    .map(|jump| jump.source_address + instruction_size),
+                    .map(|jump| jump.next_address),
             )
             .collect::<Vec<_>>();
 
@@ -313,7 +314,7 @@ pub fn analyze(
                         [
                             // The block ends after a branch instruction
                             (
-                                jump.source_address + instruction_size,
+                                jump.next_address,
                                 BlockEndKind::JumpSource(jump.clone()),
                             ),
                             // The block ends just before a branch instruction
@@ -323,9 +324,9 @@ pub fn analyze(
             )
             .chain(
                 // The block ends after an explicit return instruction
-                explicit_return_addresses
+                explicit_returned_addresses
                     .iter()
-                    .map(|&address| (address + instruction_size, BlockEndKind::ExplicitReturn)),
+                    .map(|&address| (address, BlockEndKind::ExplicitReturn)),
             )
             .chain(
                 // The block ends after a tail call
@@ -409,7 +410,6 @@ pub fn analyze(
 
                 Block {
                     start_address: addr,
-                    instruction_count: ((end_addr - addr) / instruction_size),
                     instructions: architecture.decode_instructions(
                         &segment_data[((addr - segment.address) as usize)
                             ..((end_addr - segment.address) as usize)],
@@ -462,13 +462,7 @@ pub fn analyze(
             let (block_index, mut walker) = key;
             let block = &blocks[block_index];
 
-            let block_instructions =
-                &segment_instructions[(((block.start_address - segment.address) / instruction_size)
-                    as usize)
-                    ..(((block.start_address - segment.address) / instruction_size
-                        + block.instruction_count) as usize)];
-
-            for instruction in block_instructions {
+            for instruction in &block.instructions {
                 walker.process(instruction.as_ref());
             }
 

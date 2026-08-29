@@ -36,8 +36,7 @@ impl Architecture for RiscV {
                     .decode(Isa::Rv64)
                     .expect("Failed to decode RISC-V instruction");
 
-                instructions.push(Box::new(RiscVInstruction::Instruction(instruction)));
-                instructions.push(Box::new(RiscVInstruction::Padding));
+                instructions.push(Box::new(RiscVInstruction(instruction)));
 
                 offset += 4;
             } else {
@@ -45,7 +44,7 @@ impl Architecture for RiscV {
                     .decode(Isa::Rv64)
                     .expect("Failed to decode RISC-V instruction");
 
-                instructions.push(Box::new(RiscVInstruction::Instruction(instruction)));
+                instructions.push(Box::new(RiscVInstruction(instruction)));
 
                 offset += 2;
             }

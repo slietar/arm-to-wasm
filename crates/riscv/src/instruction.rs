@@ -8,49 +8,33 @@ const RA: usize = 1;
 /// Zero register (`x0`).
 const ZERO: usize = 0;
 
-/// Wraps `raki::Instruction` so `aw_core::architecture::Instr` can be
-/// implemented for it (both are foreign to this crate, so the orphan rule
-/// requires a local newtype).
-///
-/// RISC-V instructions are 16-bit-aligned even when 32 bits wide (the `C`
-/// extension packs 16-bit instructions), while the rest of the analysis
-/// pipeline assumes every element of a decoded instruction stream occupies
-/// exactly `Architecture::instruction_size()` bytes. To reconcile the two,
-/// `RiscV::instruction_size` reports a halfword (2 bytes), and a 32-bit-wide
-/// instruction is represented as a real entry followed by a `Padding` entry
-/// standing in for its second halfword.
 #[derive(Debug)]
-pub enum RiscVInstruction {
-    Instruction(Instruction),
-    Padding,
-}
+pub struct RiscVInstruction(pub Instruction);
 
 impl Instr for RiscVInstruction {
+    fn size(&self) -> u64 {
+        if self.0.is_compressed {
+            2
+        } else {
+            4
+        }
+    }
+
     fn translate(
         &self,
         _ctx: &RoutineContext,
         _current_address: u64,
         _block_exprs: &mut Vec<Expression>,
     ) {
-        let Self::Instruction(_instruction) = self else {
-            return;
-        };
-
         todo!("RISC-V instruction translation is not implemented yet")
     }
 
     fn branch_condition(&self, _ctx: &RoutineContext) -> Option<Expression> {
-        let Self::Instruction(_instruction) = self else {
-            return None;
-        };
-
         todo!("RISC-V branch conditions are not implemented yet")
     }
 
-    fn branch_kind(&self) -> BranchKind {
-        let Self::Instruction(instruction) = self else {
-            return BranchKind::None;
-        };
+    fn branch_kind(&self, address: u64) -> BranchKind {
+        let instruction = &self.0;
 
         match &instruction.opc {
             OpcodeKind::BaseI(
@@ -63,7 +47,7 @@ impl Instr for RiscVInstruction {
             )
             | OpcodeKind::C(COpcode::BEQZ | COpcode::BNEZ) => BranchKind::Jump {
                 conditional: true,
-                target_offset: (instruction.imm.unwrap() * 2) as i64,
+                target_address: address + (instruction.imm.unwrap() as u64),
             },
 
             // JAL saves the return address in `rd`. If `rd` is zero, the return
@@ -71,13 +55,13 @@ impl Instr for RiscVInstruction {
             OpcodeKind::BaseI(BaseIOpcode::JAL) => match instruction.rd.unwrap() {
                 ZERO => BranchKind::Jump {
                     conditional: false,
-                    target_offset: (instruction.imm.unwrap() * 2) as i64,
+                    target_address: address + (instruction.imm.unwrap() as u64),
                 },
                 _ => BranchKind::Call,
             },
             OpcodeKind::C(COpcode::J) => BranchKind::Jump {
                 conditional: false,
-                target_offset: (instruction.imm.unwrap() * 2) as i64,
+                target_address: address + (instruction.imm.unwrap() as u64),
             },
             OpcodeKind::C(COpcode::JAL) => BranchKind::Call,
 
@@ -96,28 +80,16 @@ impl Instr for RiscVInstruction {
     }
 
     fn stack_frame_effect(&self, _stack_pointer: u32) -> (Option<u64>, Vec<StackAccess>) {
-        let Self::Instruction(_instruction) = self else {
-            return (None, Vec::new());
-        };
-
         // todo!("RISC-V stack frame analysis is not implemented yet")
         (None, Vec::new())
     }
 
     fn registers_read(&self) -> Vec<u32> {
-        let Self::Instruction(_instruction) = self else {
-            return Vec::new();
-        };
-
         // todo!("RISC-V register-read analysis is not implemented yet")
         Vec::new()
     }
 
     fn registers_written(&self) -> Vec<u32> {
-        let Self::Instruction(_instruction) = self else {
-            return Vec::new();
-        };
-
         Vec::new()
         // todo!("RISC-V register-written analysis is not implemented yet")
     }

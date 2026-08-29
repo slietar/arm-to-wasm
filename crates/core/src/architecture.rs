@@ -10,13 +10,9 @@ pub enum Width {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BranchKind {
-    /// Ordinary instruction, doesn't affect the control-flow graph.
     None,
-    /// Link-setting branch (e.g. `BL`): doesn't affect the CFG, but ends prologue detection.
     Call,
-    /// Transfers control to `current_address + target_offset * instruction_size`.
-    /// `conditional == false` means execution never continues past this instruction.
-    Jump { conditional: bool, target_offset: i64 },
+    Jump { conditional: bool, target_address: u64 },
     Return,
 }
 
@@ -29,11 +25,13 @@ pub struct StackAccess {
 }
 
 pub trait Instr: std::fmt::Debug {
+    fn size(&self) -> u64;
+
     fn translate(&self, ctx: &RoutineContext, current_address: u64, block_exprs: &mut Vec<Expression>);
     fn branch_condition(&self, ctx: &RoutineContext) -> Option<Expression>;
 
     // Used only by the generic CFG-building analysis.
-    fn branch_kind(&self) -> BranchKind;
+    fn branch_kind(&self, address: u64) -> BranchKind;
 
     /// `(new_frame_size_if_this_instruction_establishes_one, memory_accesses_relative_to_stack_pointer)`.
     /// Purely descriptive - the caller decides whether it's actually in a prologue.
