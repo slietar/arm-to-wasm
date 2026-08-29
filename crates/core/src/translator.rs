@@ -14,7 +14,6 @@ pub struct RoutineContext<'a, A: Architecture> {
     local_index_by_external_local_index: HashMap<u32, u32>,
     func_return_scratch_local_index: u32,
     pub module: Module,
-    pub svc_return_scratch_local_index: u32,
 }
 
 impl<'a, A: Architecture> RoutineContext<'a, A> {
@@ -88,14 +87,12 @@ impl<'a, A: Architecture> RoutineContext<'a, A> {
 
 #[derive(Debug)]
 pub struct GlobalContext<A: Architecture> {
-    module: Module,
+    pub module: Module,
 
     pub analysis: Analysis<A>,
     pub architecture: Box<A>,
     pub function_names: Vec<String>,
     pub memory_name: CString,
-    pub svc_function_name: String,
-    pub svc_return_type: Type,
 }
 
 impl<A: Architecture> GlobalContext<A> {
@@ -132,28 +129,6 @@ impl<A: Architecture> GlobalContext<A> {
             })
             .collect::<Vec<_>>();
 
-        let svc_return_registers = architecture.svc_return_registers();
-        let svc_param_registers = architecture.svc_param_registers();
-
-        let svc_return_type = module.tuple_type(
-            &svc_return_registers
-                .iter()
-                .map(|_| module.i64())
-                .collect::<Vec<_>>(),
-        );
-
-        let svc_function_name = "svc";
-
-        module.import_function(
-            svc_function_name,
-            "ref",
-            "supervisor_call",
-            &(std::iter::once(module.i32())
-                .chain(svc_param_registers.iter().map(|_| module.i64()))
-                .collect::<Vec<_>>()),
-            svc_return_type.clone(),
-        );
-
         let memory_info = set_up_memory("memory", bytes, &elf_file, &module);
 
         let context = Self {
@@ -161,10 +136,10 @@ impl<A: Architecture> GlobalContext<A> {
             function_names,
             memory_name: CString::new(memory_info.name).unwrap(),
             module: module.clone(),
-            svc_function_name: svc_function_name.to_string(),
-            svc_return_type,
             architecture,
         };
+
+        context.architecture.setup(&context)?;
 
         for (routine_index, routine) in context.analysis.routines.iter().enumerate() {
             let function_name = &context.function_names[routine_index];
@@ -278,10 +253,6 @@ impl<A: Architecture> GlobalContext<A> {
         local_types.push(return_type.clone());
         next_local_index += 1;
 
-        let svc_return_scratch_local_index = next_local_index;
-        local_types.push(self.svc_return_type.clone());
-        next_local_index += 1;
-
         _ = next_local_index;
 
         // Run translation
@@ -295,7 +266,6 @@ impl<A: Architecture> GlobalContext<A> {
             local_descriptors,
             local_index_by_external_local_index,
             module: module.clone(),
-            svc_return_scratch_local_index,
         };
 
         let mut routine_exprs = Vec::new();

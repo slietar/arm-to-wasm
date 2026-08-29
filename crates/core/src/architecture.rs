@@ -1,6 +1,6 @@
 use bnyr::Expression;
 
-use crate::translator::RoutineContext;
+use crate::translator::{GlobalContext, RoutineContext};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Width {
@@ -35,7 +35,7 @@ pub trait Instr<A: Architecture>: std::fmt::Debug {
 
     /// `(new_frame_size_if_this_instruction_establishes_one, memory_accesses_relative_to_stack_pointer)`.
     /// Purely descriptive - the caller decides whether it's actually in a prologue.
-    fn stack_frame_effect(&self, stack_pointer: u32) -> (Option<u64>, Vec<StackAccess>);
+    fn stack_frame_effect(&self) -> (Option<u64>, Vec<StackAccess>);
 
     fn registers_read(&self) -> Vec<u32>;
     fn registers_written(&self) -> Vec<u32>;
@@ -62,6 +62,7 @@ pub trait Architecture: std::fmt::Debug + Sized {
     fn instruction_size(&self) -> u64;
     fn decode_instructions(&self, bytes: &[u8]) -> Vec<Self::InstrType>;
 
+    fn setup(&self, ctx: &GlobalContext<Self>) -> Result<(), Box<dyn std::error::Error>>;
     fn locals(&self) -> Vec<LocalDescriptor>;
 
     fn param_registers(&self) -> Vec<u32>;

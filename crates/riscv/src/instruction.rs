@@ -3,7 +3,7 @@ use aw_core::translator::RoutineContext;
 use bnyr::{BinaryOp, Expression, LoadVariant, StoreVariant};
 use raki::{BaseIOpcode, COpcode, Instruction, OpcodeKind};
 
-use crate::arch::RiscV;
+use crate::arch::{A0, RiscV};
 use crate::simplify_instruction::expand_compressed;
 
 /// Return-address register (`ra` / `x1`).
@@ -98,6 +98,30 @@ impl Instr<RiscV> for RiscVInstruction {
                 if instr.rd == Some(ZERO) && instr.rs1 == Some(RA) && instr.imm == Some(0) =>
             {
                 block_exprs.push(ctx.return_());
+            },
+
+            OpcodeKind::BaseI(BaseIOpcode::ECALL) => {
+                let syscall_name = "environment_call";
+
+                block_exprs.push(
+                    self.write_register(
+                        ctx,
+                        crate::arch::A0,
+                        ctx.module.call(
+                            syscall_name,
+                            &[
+                                self.read_register(ctx, crate::arch::A0),
+                                self.read_register(ctx, crate::arch::A1),
+                                self.read_register(ctx, crate::arch::A2),
+                                self.read_register(ctx, crate::arch::A3),
+                                self.read_register(ctx, crate::arch::A4),
+                                self.read_register(ctx, crate::arch::A5),
+                                self.read_register(ctx, crate::arch::A6),
+                            ],
+                            ctx.module.i64(),
+                        )
+                    )
+                );
             }
 
             _ => {
@@ -166,7 +190,7 @@ impl Instr<RiscV> for RiscVInstruction {
         }
     }
 
-    fn stack_frame_effect(&self, _stack_pointer: u32) -> (Option<u64>, Vec<StackAccess>) {
+    fn stack_frame_effect(&self) -> (Option<u64>, Vec<StackAccess>) {
         // todo!("RISC-V stack frame analysis is not implemented yet")
         (None, Vec::new())
     }

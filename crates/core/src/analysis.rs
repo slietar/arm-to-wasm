@@ -64,8 +64,6 @@ pub fn analyze<A: Architecture>(
     elf_file: &ElfFile<'_>,
     architecture: &A,
 ) -> Result<Analysis<A>, Box<dyn std::error::Error>> {
-    let stack_pointer = architecture.stack_pointer_register();
-
     let (section_headers_opt, section_name_table_opt) = elf_file.section_headers_with_strtab()?;
     let section_headers = section_headers_opt
         .ok_or_else(|| "ELF has no section headers".to_string())?
@@ -197,7 +195,7 @@ pub fn analyze<A: Architecture>(
             let next_address = current_address + instruction.size();
 
             let branch_kind = instruction.branch_kind(current_address);
-            let (allocate, accesses) = instruction.stack_frame_effect(stack_pointer);
+            let (allocate, accesses) = instruction.stack_frame_effect();
 
             // eprintln!("{:#x}: {:?}", current_address, instruction);
             // eprintln!("  Branch kind: {:x?}", branch_kind);

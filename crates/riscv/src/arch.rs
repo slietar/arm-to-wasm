@@ -1,19 +1,30 @@
-use aw_core::architecture::{Architecture, LocalDescriptor, LocalType, Width};
+use aw_core::architecture::{Architecture, LocalDescriptor, LocalType};
+use aw_core::translator::GlobalContext;
 use raki::{Decode, Isa};
 
 use crate::instruction::RiscVInstruction;
 
-/// Stack pointer register (`sp` / `x2`).
-const SP: u32 = 2;
-/// Argument/return-value registers (`a0`..`a7` / `x10`..`x17`).
-const ARG_REGISTERS: [u32; 8] = [10, 11, 12, 13, 14, 15, 16, 17];
-/// Syscall-number register (`a7` / `x17`).
-const SYSCALL_NUMBER_REGISTER: u32 = 17;
+type RegisterType = usize;
+
 /// Zero register (`x0`).
-const ZERO: u32 = 0;
+pub const ZERO: u32 = 0;
+
+pub const A0: RegisterType = 10;
+pub const A1: RegisterType = 11;
+pub const A2: RegisterType = 12;
+pub const A3: RegisterType = 13;
+pub const A4: RegisterType = 14;
+pub const A5: RegisterType = 15;
+pub const A6: RegisterType = 16;
 
 #[derive(Debug)]
 pub struct RiscV;
+
+impl RiscV {
+    fn ecall_name(&self) -> &'static str {
+        "environment_call"
+    }
+}
 
 impl Architecture for RiscV {
     type InstrType = RiscVInstruction;
@@ -53,6 +64,26 @@ impl Architecture for RiscV {
         }
 
         instructions
+    }
+
+    fn setup(&self, ctx: &GlobalContext<Self>) -> Result<(), Box<dyn std::error::Error>> {
+        ctx.module.import_function(
+            self.ecall_name(),
+            "ref",
+            "supervisor_call",
+            &[
+                ctx.module.i64(),
+                ctx.module.i64(),
+                ctx.module.i64(),
+                ctx.module.i64(),
+                ctx.module.i64(),
+                ctx.module.i64(),
+                ctx.module.i64(),
+            ],
+            ctx.module.i64(),
+        );
+
+        Ok(())
     }
 
     fn locals(&self) -> Vec<LocalDescriptor> {
@@ -247,25 +278,19 @@ impl Architecture for RiscV {
     }
 
     fn param_registers(&self) -> Vec<u32> {
-        ARG_REGISTERS
-            .iter()
-            .copied()
-            .chain(std::iter::once(SP))
-            .collect()
+        todo!()
     }
 
     fn svc_param_registers(&self) -> Vec<u32> {
-        std::iter::once(SYSCALL_NUMBER_REGISTER)
-            .chain(ARG_REGISTERS[..6].iter().copied())
-            .collect()
+        todo!()
     }
 
     fn svc_return_registers(&self) -> Vec<u32> {
-        ARG_REGISTERS[..2].to_vec()
+        todo!()
     }
 
     fn stack_pointer_register(&self) -> u32 {
-        SP
+        todo!()
     }
 
     fn is_zero_register(&self, register: u32) -> bool {
