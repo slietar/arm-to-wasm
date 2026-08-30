@@ -5,8 +5,7 @@ use core::arch::asm;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() {
-    // compare(13, 13);
-    exit(3);
+    exit(72);
 }
 
 #[inline(never)]

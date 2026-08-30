@@ -15,10 +15,55 @@ pub struct RoutineContext<'a, A: Architecture> {
     local_descriptors: Vec<LocalDescriptor>,
     local_index_by_external_local_index: HashMap<u32, u32>,
     func_return_scratch_local_index: u32,
+    func_return_scratch_local_type: Type,
     pub module: Module,
 }
 
 impl<'a, A: Architecture> RoutineContext<'a, A> {
+    pub fn call_routine(&self, routine_index: usize, block_exprs: &mut Vec<Expression>) {
+        let routine = &self.global.analysis.routines[routine_index];
+        eprintln!(
+            "Calling routine {} ({})",
+            routine_index,
+            routine.name.as_deref().unwrap_or("none")
+        );
+
+        let arg_exprs = self
+            .local_descriptors
+            .iter()
+            .filter(|desc| desc.argument)
+            .enumerate()
+            .map(|(local_index, desc)| self.read_local(local_index as u32))
+            .collect::<Vec<_>>();
+
+        block_exprs.push(self.module.local_set(
+            self.func_return_scratch_local_index,
+            self.module.call(
+                &self.global.function_names[routine_index],
+                &arg_exprs,
+                self.func_return_scratch_local_type.clone(),
+            ),
+        ));
+
+        for (local_index, _) in self
+            .local_descriptors
+            .iter()
+            .filter(|desc| desc.return_value)
+            .enumerate()
+        {
+            block_exprs.push(self.write_local(
+                local_index as u32,
+                self.module.tuple_extract(
+                    self.module.local_get(
+                        self.func_return_scratch_local_index,
+                        self.func_return_scratch_local_type.clone(),
+                    ),
+                    local_index as u32,
+                ),
+            ));
+        }
+    }
+
     pub fn read_local(&self, local_index: u32) -> Expression {
         let descriptor = &self.local_descriptors[local_index as usize];
         let local_type = self.global.local_type_to_type(&descriptor.type_);
@@ -44,48 +89,6 @@ impl<'a, A: Architecture> RoutineContext<'a, A> {
             ),
         )
     }
-
-    // pub fn read_register(&self, register: u32, width: Width) -> Expression {
-    //     if self.global.architecture.is_zero_register(register) {
-    //         return match width {
-    //             Width::W32 => self.module.const_(0i32),
-    //             Width::W64 => self.module.const_(0i64),
-    //         };
-    //     }
-
-    //     let storage_width = self.global.architecture.local_width(register);
-    //     let local_index = self.get_register_local_index(register);
-
-    //     let local_type = match storage_width {
-    //         Width::W32 => self.module.i32(),
-    //         Width::W64 => self.module.i64(),
-    //     };
-
-    //     let expr = self.module.local_get(local_index, local_type);
-
-    //     match (storage_width, width) {
-    //         (Width::W64, Width::W32) => self.module.unary(expr, UnaryOp::WrapInt64),
-    //         (Width::W32, Width::W64) => self.module.unary(expr, UnaryOp::ExtendUInt32),
-    //         (Width::W64, Width::W64) | (Width::W32, Width::W32) => expr,
-    //     }
-    // }
-
-    // pub fn write_register(&self, register: u32, width: Width, value: Expression) -> Expression {
-    //     if self.global.architecture.is_zero_register(register) {
-    //         return self.module.nop();
-    //     }
-
-    //     let storage_width = self.global.architecture.local_width(register);
-
-    //     let value = match (storage_width, width) {
-    //         (Width::W64, Width::W32) => self.module.unary(value, UnaryOp::ExtendUInt32),
-    //         (Width::W32, Width::W64) => self.module.unary(value, UnaryOp::WrapInt64),
-    //         (Width::W64, Width::W64) | (Width::W32, Width::W32) => value,
-    //     };
-
-    //     self.module
-    //         .local_set(self.get_register_local_index(register), value)
-    // }
 }
 
 #[derive(Debug)]
@@ -267,6 +270,7 @@ impl<A: Architecture> GlobalContext<A> {
             global: self,
 
             func_return_scratch_local_index,
+            func_return_scratch_local_type: return_type.clone(),
             local_descriptors,
             local_index_by_external_local_index,
             module: module.clone(),
@@ -284,7 +288,12 @@ impl<A: Architecture> GlobalContext<A> {
                     let current_address = block.start_address
                         + (instruction_index as u64) * self.architecture.instruction_size();
 
-                    instruction.translate(&context, current_address, &mut block_exprs);
+                    instruction.translate(
+                        &context,
+                        &block.metadata[instruction_index],
+                        current_address,
+                        &mut block_exprs,
+                    );
                 }
 
                 if block.fallthrough_block_index.is_none() && block.jump_block_index.is_none() {

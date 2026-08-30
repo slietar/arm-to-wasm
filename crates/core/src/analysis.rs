@@ -34,6 +34,7 @@ struct ExecutableSegment<A: Architecture> {
 pub struct Block<A: Architecture> {
     pub fallthrough_block_index: Option<usize>,
     pub instructions: Vec<A::InstrType>,
+    pub metadata: Vec<<A::InstrType as Instr<A>>::Metadata>,
     pub jump_block_index: Option<usize>,
     pub start_address: u64,
 
@@ -57,6 +58,19 @@ struct StackAccess {
     size_bytes: u32,
     read: bool,
     write: bool,
+}
+
+#[derive(Debug)]
+pub struct AnalysisContext {
+    routine_addresses: Vec<u64>,
+}
+
+impl AnalysisContext {
+    pub fn resolve_routine_jump(&self, target_address: u64) -> Option<usize> {
+        self.routine_addresses
+            .iter()
+            .position(|addr| *addr == target_address)
+    }
 }
 
 pub fn analyze<A: Architecture>(
@@ -123,14 +137,21 @@ pub fn analyze<A: Architecture>(
         })
         .collect();
 
-    let mut routines = Vec::new();
-
     let mut routine_addresses_and_names_sorted = routines_names_by_address
         .iter()
         .map(|(&addr, name)| (addr, (*name).as_deref()))
         .collect::<Vec<_>>();
 
     routine_addresses_and_names_sorted.sort_by_key(|(addr, _)| *addr);
+
+    let context = AnalysisContext {
+        routine_addresses: routine_addresses_and_names_sorted
+            .iter()
+            .map(|(addr, _)| *addr)
+            .collect(),
+    };
+
+    let mut routines = Vec::new();
 
     for (routine_address, routine_name) in routine_addresses_and_names_sorted.iter().copied() {
         let segment = executable_segments
@@ -165,8 +186,6 @@ pub fn analyze<A: Architecture>(
         let mut stack_accesses = Vec::<StackAccess>::new();
         let mut explicit_returned_addresses = HashSet::<u64>::new();
 
-        let mut current_address = routine_address;
-
         // TODO: Improve instruction index lookup
         let routine_first_instruction_index = {
             let mut p = segment.address;
@@ -178,7 +197,7 @@ pub fn analyze<A: Architecture>(
                     let instruction_end = p + instruction_size;
 
                     let is_first_instruction =
-                        current_address >= p && current_address < instruction_end;
+                        routine_address >= p && routine_address < instruction_end;
 
                     p = instruction_end;
 
@@ -187,6 +206,12 @@ pub fn analyze<A: Architecture>(
                 .unwrap()
         };
 
+        let mut current_address = routine_address;
+        let mut active = true;
+
+        let mut instruction_metadatas = Vec::new();
+        let mut instruction_addresses = Vec::new();
+
         for (instruction_index, instruction) in segment.instructions
             [routine_first_instruction_index..]
             .iter()
@@ -194,23 +219,32 @@ pub fn analyze<A: Architecture>(
         {
             // Catches branches [to a function that makes no calls or] to a function that never returns
             if (current_address < routine_address) || (current_address >= routine_end_address) {
-                eprintln!("Unexpected stopping at address {:#x}", current_address,);
+                if active {
+                    eprintln!("Unexpected stopping at address {:#x}", current_address,);
+                }
+
                 break;
             }
 
+            instruction_addresses.push(current_address);
+
             let next_address = current_address + instruction.size();
 
-            let branch_kind = instruction.branch_kind(
+            let (branch_kind, instruction_metadata) = instruction.branch_kind(
                 current_address,
                 (instruction_index > 0).then(|| {
                     &segment.instructions[routine_first_instruction_index + instruction_index - 1]
                 }),
+                &context,
             );
 
             let (allocate, accesses) = instruction.stack_frame_effect();
 
             // eprintln!("{:#x}: {:?}", current_address, instruction);
             eprintln!("  Branch kind: {:x?}", branch_kind);
+            eprintln!("  Metadata: {:x?}", instruction_metadata);
+
+            instruction_metadatas.push(instruction_metadata);
 
             if let Some(size) = allocate
                 && stack_entry_size.is_none()
@@ -265,10 +299,7 @@ pub fn analyze<A: Architecture>(
                     });
 
                     is_prologue = false;
-
-                    if !conditional {
-                        break;
-                    }
+                    active = active && conditional;
                 }
                 BranchKind::Call { target_address } => {
                     is_prologue = false;
@@ -276,7 +307,7 @@ pub fn analyze<A: Architecture>(
                 BranchKind::Return => {
                     is_prologue = false;
                     explicit_returned_addresses.insert(next_address);
-                    break;
+                    active = false;
                 }
                 BranchKind::None => {}
                 BranchKind::Unknown => {
@@ -287,9 +318,11 @@ pub fn analyze<A: Architecture>(
             current_address = next_address;
         }
 
+        instruction_addresses.push(current_address);
+
         let _ = is_prologue;
 
-        eprintln!("Jumps: {:#x?}", jumps);
+        // eprintln!("Jumps: {:#x?}", jumps);
 
         // Block analysis
 
@@ -418,12 +451,17 @@ pub fn analyze<A: Architecture>(
                         None
                     };
 
+                let first_instruction_index = instruction_addresses.binary_search(&addr).unwrap();
+                let end_instruction_index = instruction_addresses.binary_search(end_addr).unwrap();
+
                 Block {
                     start_address: addr,
                     instructions: architecture.decode_instructions(
                         &segment_data[((addr - segment.address) as usize)
                             ..((end_addr - segment.address) as usize)],
                     ),
+                    metadata: instruction_metadatas[first_instruction_index..end_instruction_index]
+                        .to_vec(),
                     fallthrough_block_index,
                     jump_block_index,
                     tail_call_routine_index,
@@ -518,7 +556,8 @@ pub fn analyze<A: Architecture>(
         });
     }
 
-    routines.sort_by_key(|routine| -(routine.address as i64));
+    // Not sure why this was here
+    // routines.sort_by_key(|routine| -(routine.address as i64));
 
     Ok(Analysis {
         entry_routine_index: routines

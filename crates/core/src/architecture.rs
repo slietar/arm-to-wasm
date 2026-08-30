@@ -1,6 +1,6 @@
 use bnyr::Expression;
 
-use crate::translator::{GlobalContext, RoutineContext};
+use crate::{analysis::AnalysisContext, translator::{GlobalContext, RoutineContext}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Width {
@@ -26,13 +26,15 @@ pub struct StackAccess {
 }
 
 pub trait Instr<A: Architecture>: std::fmt::Debug {
+    type Metadata: Clone + std::fmt::Debug;
+
     fn size(&self) -> u64;
 
-    fn translate(&self, ctx: &RoutineContext<A>, current_address: u64, block_exprs: &mut Vec<Expression>);
+    fn translate(&self, ctx: &RoutineContext<A>, metadata: &Self::Metadata, current_address: u64, block_exprs: &mut Vec<Expression>);
     fn branch_condition(&self, ctx: &RoutineContext<A>) -> Option<Expression>;
 
     // Used only by the generic CFG-building analysis.
-    fn branch_kind(&self, address: u64, prev_instruction: Option<&Self>) -> BranchKind;
+    fn branch_kind(&self, address: u64, prev_instruction: Option<&Self>, context: &AnalysisContext) -> (BranchKind, Self::Metadata);
 
     /// `(new_frame_size_if_this_instruction_establishes_one, memory_accesses_relative_to_stack_pointer)`.
     /// Purely descriptive - the caller decides whether it's actually in a prologue.
@@ -52,6 +54,7 @@ pub enum LocalType {
 
 #[derive(Debug)]
 pub struct LocalDescriptor {
+    // Currently the implementation relies on argument <=> return_value
     pub argument: bool,
     pub return_value: bool,
     pub type_: LocalType,

@@ -1,3 +1,4 @@
+use aw_core::analysis::AnalysisContext;
 use aw_core::architecture::{BranchKind, Instr, StackAccess};
 use aw_core::translator::RoutineContext;
 use bnyr::{BinaryOp, Expression, LoadVariant, StoreVariant};
@@ -5,6 +6,11 @@ use raki::{BaseIOpcode, Instruction, OpcodeKind};
 
 use crate::arch::RiscV;
 use crate::simplify_instruction::expand_compressed;
+
+#[derive(Clone, Debug, Default)]
+pub struct RiscVInstructionMetadata {
+    call_routine_index: Option<usize>,
+}
 
 #[derive(Debug)]
 pub struct RiscVInstruction(pub Instruction);
@@ -37,6 +43,8 @@ impl RiscVInstruction {
 }
 
 impl Instr<RiscV> for RiscVInstruction {
+    type Metadata = RiscVInstructionMetadata;
+
     fn size(&self) -> u64 {
         if self.0.is_compressed { 2 } else { 4 }
     }
@@ -44,11 +52,17 @@ impl Instr<RiscV> for RiscVInstruction {
     fn translate(
         &self,
         ctx: &RoutineContext<RiscV>,
-        _current_address: u64,
+        metadata: &Self::Metadata,
+        current_address: u64,
         block_exprs: &mut Vec<Expression>,
     ) {
         let uncompressed_instr = expand_compressed(&self.0);
         let instr = uncompressed_instr.as_ref().unwrap_or(&self.0);
+
+        if let Some(call_routine_index) = metadata.call_routine_index {
+            ctx.call_routine(call_routine_index, block_exprs);
+            return;
+        }
 
         match &instr.opc {
             OpcodeKind::BaseI(BaseIOpcode::ADD) => block_exprs.push(self.write_register(
@@ -126,6 +140,16 @@ impl Instr<RiscV> for RiscVInstruction {
                 ));
             }
 
+            OpcodeKind::BaseI(BaseIOpcode::AUIPC) => block_exprs.push(self.write_register(
+                ctx,
+                instr.rd.unwrap(),
+                ctx.module.binary(
+                    ctx.module.const_(current_address as i64),
+                    ctx.module.const_(instr.imm.unwrap() as i64),
+                    BinaryOp::AddInt64,
+                ),
+            )),
+
             _ => {
                 eprintln!("Unimplemented RISC-V instruction: {:?}", instr);
             }
@@ -146,7 +170,12 @@ impl Instr<RiscV> for RiscVInstruction {
         }
     }
 
-    fn branch_kind(&self, address: u64, prev_instruction: Option<&Self>) -> BranchKind {
+    fn branch_kind(
+        &self,
+        address: u64,
+        prev_instruction: Option<&Self>,
+        context: &AnalysisContext,
+    ) -> (BranchKind, Self::Metadata) {
         let expanded = expand_compressed(&self.0);
         let instruction = expanded.as_ref().unwrap_or(&self.0);
 
@@ -160,25 +189,39 @@ impl Instr<RiscV> for RiscVInstruction {
                 | BaseIOpcode::BGE
                 | BaseIOpcode::BLTU
                 | BaseIOpcode::BGEU,
-            ) => BranchKind::Jump {
-                conditional: true,
-                target_address: address + (instruction.imm.unwrap() as u64),
-            },
+            ) => (
+                BranchKind::Jump {
+                    conditional: true,
+                    target_address: address + (instruction.imm.unwrap() as u64),
+                },
+                Default::default(),
+            ),
 
             // JAL saves the return address in `rd`. If `rd` is zero, the return
             // address is discarded.
             OpcodeKind::BaseI(BaseIOpcode::JAL) => match instruction.rd.unwrap() {
-                crate::arch::ZERO => BranchKind::Jump {
-                    conditional: false,
-                    target_address: address + (instruction.imm.unwrap() as u64),
-                },
-                crate::arch::RA => {
-                    // The return address is expected to be `ra`.
-                    BranchKind::Call {
+                crate::arch::ZERO => (
+                    BranchKind::Jump {
+                        conditional: false,
                         target_address: address + (instruction.imm.unwrap() as u64),
-                    }
+                    },
+                    Default::default(),
+                ),
+                crate::arch::RA => {
+                    let target_address = address + (instruction.imm.unwrap() as u64);
+                    let target_routine_index = context.resolve_routine_jump(target_address);
+
+                    assert!(target_routine_index.is_some());
+
+                    // The return address is expected to be `ra`.
+                    (
+                        BranchKind::Call { target_address },
+                        RiscVInstructionMetadata {
+                            call_routine_index: target_routine_index,
+                        },
+                    )
                 }
-                _ => BranchKind::Unknown,
+                _ => (BranchKind::Unknown, Default::default()),
             },
 
             OpcodeKind::BaseI(BaseIOpcode::JALR) => {
@@ -188,7 +231,7 @@ impl Instr<RiscV> for RiscVInstruction {
                 if (return_address_register != crate::arch::RA)
                     && (return_address_register != crate::arch::ZERO)
                 {
-                    return BranchKind::Unknown;
+                    return (BranchKind::Unknown, Default::default());
                 }
 
                 if let Some(
@@ -204,27 +247,37 @@ impl Instr<RiscV> for RiscVInstruction {
                         + (instruction.imm.unwrap() as i64))
                         as u64;
 
+                    let target_routine_index = context.resolve_routine_jump(target_address);
+
                     eprintln!("Computed target address: {:#x}", target_address);
 
                     match return_address_register {
-                        crate::arch::RA => BranchKind::Call { target_address },
-                        crate::arch::ZERO => BranchKind::Jump {
-                            conditional: false,
-                            target_address,
-                        },
+                        crate::arch::RA if target_routine_index.is_some() => (
+                            BranchKind::Call { target_address },
+                            RiscVInstructionMetadata {
+                                call_routine_index: target_routine_index,
+                            },
+                        ),
+                        crate::arch::ZERO => (
+                            BranchKind::Jump {
+                                conditional: false,
+                                target_address,
+                            },
+                            Default::default(),
+                        ),
                         _ => unreachable!(),
                     }
                 } else if (return_address_register == crate::arch::ZERO)
                     && (target_address_register == crate::arch::RA)
                     && (instruction.imm.unwrap() == 0)
                 {
-                    BranchKind::Return
+                    (BranchKind::Return, Default::default())
                 } else {
-                    BranchKind::Unknown
+                    (BranchKind::Unknown, Default::default())
                 }
             }
 
-            _ => BranchKind::None,
+            _ => (BranchKind::None, Default::default()),
         }
     }
 
