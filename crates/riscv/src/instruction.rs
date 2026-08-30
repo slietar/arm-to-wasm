@@ -83,11 +83,15 @@ impl Instr<RiscV> for RiscVInstruction {
                     BinaryOp::AddInt64,
                 ),
             )),
-            OpcodeKind::BaseI(BaseIOpcode::LW) => block_exprs.push(self.write_register(
+            OpcodeKind::BaseI(BaseIOpcode::LD | BaseIOpcode::LW) => block_exprs.push(self.write_register(
                 ctx,
                 instr.rd.unwrap(),
                 ctx.module.load(
-                    LoadVariant::I64L32 { signed: true },
+                    match instr.opc {
+                        OpcodeKind::BaseI(BaseIOpcode::LD) => LoadVariant::I64,
+                        OpcodeKind::BaseI(BaseIOpcode::LW) => LoadVariant::I64L32 { signed: true },
+                        _ => unreachable!(),
+                    },
                     ctx.module.binary(
                         self.read_register(ctx, instr.rs1.unwrap()),
                         ctx.module.const_(instr.imm.unwrap() as i64),
@@ -98,8 +102,12 @@ impl Instr<RiscV> for RiscVInstruction {
                     &ctx.global.memory_name,
                 ),
             )),
-            OpcodeKind::BaseI(BaseIOpcode::SW) => block_exprs.push(ctx.module.store(
-                StoreVariant::I64L32,
+            OpcodeKind::BaseI(BaseIOpcode::SD | BaseIOpcode::SW) => block_exprs.push(ctx.module.store(
+                match instr.opc {
+                    OpcodeKind::BaseI(BaseIOpcode::SW) => StoreVariant::I64L32,
+                    OpcodeKind::BaseI(BaseIOpcode::SD) => StoreVariant::I64,
+                    _ => unreachable!(),
+                },
                 self.read_register(ctx, instr.rs2.unwrap()),
                 ctx.module.binary(
                     self.read_register(ctx, instr.rs1.unwrap()),
